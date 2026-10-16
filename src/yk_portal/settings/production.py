@@ -26,6 +26,7 @@ ALLOWED_HOSTS = [YK_CONFIG.application.public_host]
 CSRF_TRUSTED_ORIGINS = [YK_CONFIG.application.public_origin]
 DATABASES = {"default": django_database(YK_CONFIG.database)}
 YK_MASTER_KEY_PATH = str(YK_CONFIG.master_key_path)
+YK_TRUSTED_PROXIES = YK_CONFIG.trusted_proxy_addresses
 
 # TLS ends at the reverse proxy (spec §32), which sets X-Forwarded-Proto. The
 # application listens only where the proxy reaches it (listen_address), so no

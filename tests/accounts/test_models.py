@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
 
-from yk_portal.accounts.models import AccountState, Role, Theme, User, UserRole
+from yk_portal.accounts.models import AccountState, Role, User, UserRole
 from yk_portal.accounts.validators import validate_username
 
 pytestmark = pytest.mark.django_db
@@ -16,7 +16,7 @@ def test_new_user_defaults():
     assert isinstance(user.id, uuid.UUID)
     assert user.state == AccountState.PROVISIONING
     assert user.failed_login_count == 0
-    assert user.theme == Theme.BROWSER
+    assert user.theme == ""
     assert user.password_hash == user.radius_password_hash == user.temporary_password_hash == ""
     assert user.temporary_password_expires_at is None
     assert user.last_login_at is None

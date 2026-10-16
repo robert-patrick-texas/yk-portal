@@ -1,0 +1,36 @@
+{% load static %}<!doctype html>
+<html lang="en"{% if theme %} data-theme="{{ theme }}"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %}{{ portal.portal_name }}</title>
+  <link rel="stylesheet" href="{% static 'web/portal.css' %}">
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="{% url 'home' %}">{{ portal.portal_name }}</a>
+    <div class="bar-end">
+      <form class="theme" method="post" action="{% url 'theme' %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <span class="theme-label" id="theme-label">Theme</span>
+        <span class="segmented" role="group" aria-labelledby="theme-label">
+          {% for value, label in themes %}
+          <button type="submit" name="theme" value="{{ value }}" aria-pressed="{% if value == theme_shown %}true{% else %}false{% endif %}">{{ label }}</button>
+          {% endfor %}
+        </span>
+      </form>
+      {% if account %}
+      <form class="signout" method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <span class="who">{{ account.username }}</span>
+        <button type="submit" class="link">Sign out</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+  <main class="{% block main_class %}page{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

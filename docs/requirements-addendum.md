@@ -100,6 +100,8 @@ tolerated, not offered.
 temporary password count toward the failed-login limit (section 3.2) as
 spec §18.1 says, and reaching it moves the account from PROVISIONING to
 LOCKED. This adds PROVISIONING -> LOCKED to the transitions of spec §7.1.
+Unlocking an account that still has a temporary password (it never finished
+provisioning) returns it to PROVISIONING, not ACTIVE.
 
 ---
 
@@ -501,3 +503,4 @@ Adds to spec §25 and §27.
 | 2026-10-16 | Python 3.14.4+, uv 0.13.1+, Django LTS, server-rendered pages | 10 |
 | 2026-10-16 | The web login tolerates `password:OTP`; password + OTP stays the standard form | 2.9 |
 | 2026-10-16 | PROVISIONING accounts lock after consecutive failed logins reach the limit | 2.10 |
+| 2026-10-16 | Unlocking an account that still has a temporary password returns it to PROVISIONING | 2.10 |

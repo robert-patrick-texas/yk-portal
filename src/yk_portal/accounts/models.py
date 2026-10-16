@@ -56,7 +56,8 @@ class User(models.Model):
         max_length=16, choices=AccountState.choices, default=AccountState.PROVISIONING
     )
     failed_login_count = models.PositiveSmallIntegerField(default=0)
-    theme = models.CharField(max_length=8, choices=Theme.choices, default=Theme.BROWSER)
+    # Empty until the user chooses: the default theme setting applies (addendum §4.2).
+    theme = models.CharField(max_length=8, choices=Theme.choices, blank=True, default="")
     roles = models.ManyToManyField(Role, through="UserRole", related_name="users")
     groups = models.ManyToManyField("Group", through="UserGroup", related_name="users")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -75,7 +76,7 @@ class User(models.Model):
                 condition=models.Q(state__in=AccountState.values), name="users_state_valid"
             ),
             models.CheckConstraint(
-                condition=models.Q(theme__in=Theme.values), name="users_theme_valid"
+                condition=models.Q(theme__in=[*Theme.values, ""]), name="users_theme_valid"
             ),
         ]
 

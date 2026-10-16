@@ -25,6 +25,7 @@ from yk_portal.authentication.passwords import (
     hash_web_password,
     validate_password,
 )
+from yk_portal.authentication.sessions import revoke_sessions
 from yk_portal.portal_settings.service import current as current_settings
 
 from .models import AccountState, Group, Role, User
@@ -126,10 +127,13 @@ def _create(
 
 
 def disable(user: User, actor: Actor) -> None:
-    """PROVISIONING, ACTIVE or LOCKED -> DISABLED (spec §7.1), unless it is the last admin."""
+    """PROVISIONING, ACTIVE or LOCKED -> DISABLED (spec §7.1), unless it is the last admin.
+
+    Ends the account's sessions.
+    """
     with _account(user, {PROVISIONING, ACTIVE, LOCKED}, keep_an_admin=True) as account:
         _set_state(account, actor, DISABLED, EventType.ACCOUNT_DISABLED)
-    # Phase 4: revoke the account's sessions.
+        revoke_sessions(account)
 
 
 def enable(user: User, actor: Actor) -> None:
@@ -148,20 +152,28 @@ def enable(user: User, actor: Actor) -> None:
 
 
 def lock(user: User, actor: Actor) -> None:
-    """ACTIVE -> LOCKED (spec §7.1, §18)."""
-    with _account(user, {ACTIVE}) as account:
+    """ACTIVE or PROVISIONING -> LOCKED, ending the account's sessions (spec §7.1, §18;
+    addendum §2.10)."""
+    with _account(user, {ACTIVE, PROVISIONING}) as account:
         _set_state(account, actor, LOCKED, EventType.ACCOUNT_LOCKED)
-    # Phase 4: revoke the account's sessions.
+        revoke_sessions(account)
 
 
 def unlock(user: User, actor: Actor) -> None:
-    """LOCKED -> ACTIVE, clearing the failed-login count (spec §7.1, §18)."""
+    """LOCKED -> ACTIVE, clearing the failed-login count (spec §7.1, §18).
+
+    An account that still has a temporary password never finished provisioning,
+    so it returns to PROVISIONING instead (addendum §2.10).
+    """
     with _account(user, {LOCKED}) as account:
-        _set_state(account, actor, ACTIVE, EventType.ACCOUNT_UNLOCKED, failed_login_count=0)
+        state = PROVISIONING if account.temporary_password_hash else ACTIVE
+        _set_state(account, actor, state, EventType.ACCOUNT_UNLOCKED, failed_login_count=0)
 
 
 def reset_to_provisioning(user: User, actor: Actor) -> str:
     """ACTIVE, LOCKED or DISABLED -> PROVISIONING with a new temporary password (spec §15).
+
+    Ends the account's sessions.
 
     Returns:
         The new temporary password, shown once to the admin.
@@ -178,7 +190,8 @@ def reset_to_provisioning(user: User, actor: Actor) -> str:
             temporary_password_hash=temporary_hash,
             temporary_password_expires_at=_temporary_expiry(),
         )
-    # Phase 4: revoke the account's sessions. Phase 5: disable its YubiKeys.
+        revoke_sessions(account)
+    # Phase 5: disable its YubiKeys.
     return temporary
 
 

@@ -6,6 +6,7 @@ database is reachable come from /etc/yk-portal/config.toml (addendum §3.5),
 read by the production settings.
 """
 
+import ipaddress
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
@@ -25,8 +26,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "yk_portal.web.middleware.ContentSecurityPolicyMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
+    "yk_portal.authentication.sessions.SessionMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -38,7 +41,11 @@ TEMPLATES = [
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "APP_DIRS": True,
         "OPTIONS": {
-            "context_processors": ["django.template.context_processors.request"],
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.template.context_processors.csrf",
+                "yk_portal.web.context_processors.portal",
+            ],
         },
     },
 ]
@@ -59,6 +66,10 @@ STATIC_URL = "static/"
 
 # The master key file (spec §22.4); production takes it from the configuration.
 YK_MASTER_KEY_PATH = "/etc/yk-portal/master.key"
+
+# Proxies whose X-Forwarded-For is believed, for the client address in sessions
+# and the audit log; production takes them from the configuration.
+YK_TRUSTED_PROXIES = (ipaddress.ip_network("127.0.0.1/32"), ipaddress.ip_network("::1/128"))
 
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = "Strict"

@@ -159,7 +159,7 @@ def test_bootstrap_admin_only_while_there_is_no_admin(actor, make_user, state):
 ALLOWED = {
     services.disable: {P, A, L},
     services.enable: {D},
-    services.lock: {A},
+    services.lock: {P, A},
     services.unlock: {L},
     services.reset_to_provisioning: {A, L, D},
     services.set_temporary_password: {P},

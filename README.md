@@ -11,13 +11,15 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 3 done: configuration file, master key,
+**Status:** spec Phases 1 to 4 done: configuration file, master key,
 AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and their
 states, temporary passwords, the password policy, roles with last-admin
 protection, groups, the database-backed settings and audit events, and the
 `bootstrap-admin`, `create-admin` and `reset-admin` commands; YubiKey
-credentials with encrypted secrets, and Yubico OTP checking (ModHex, AES-128,
-CRC, private ID, replay counters saved atomically). No web pages yet.
+credentials with encrypted secrets and Yubico OTP checking; the sign-in page
+(password + OTP, or the temporary password for a new account), lockout,
+sessions with idle and maximum-length limits, sign-out, and light and dark
+themes. Onboarding, YubiKey management and the admin pages come next.
 
 ## Documents
 
@@ -61,8 +63,12 @@ files in the current directory: `dev.sqlite3` and `dev-master.key`.
 ```bash
 uv run yk-portal master-key-create dev-master.key   # once
 uv run python manage.py migrate
-uv run python manage.py check
+uv run python manage.py bootstrap-admin             # prints a temporary password
+uv run python manage.py runserver                   # http://localhost:8000/login/
 ```
+
+The session and CSRF cookies are marked Secure; browsers still send them to
+`localhost` over plain HTTP.
 
 ## Production configuration
 
