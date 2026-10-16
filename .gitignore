@@ -1,0 +1,23 @@
+# Python and uv
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local databases and secrets: never commit these
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.key
+.env
+
+# CSV files may hold YubiKey AES keys (radiator-yubikey exports, yk-portal
+# exports). Test fixtures with test keys only go in tests/fixtures/.
+*.csv
+!tests/fixtures/*.csv
