@@ -109,6 +109,13 @@ def test_login(alice, otp):
     assert event.source_ip == "192.0.2.10"
 
 
+def test_login_deletes_ended_sessions(alice, otp, make_user):
+    old, _ = start_session(make_user(), CLIENT)
+    Session.objects.filter(pk=old.pk).update(revoked_at=timezone.now())
+    session, _ = log_in("alice", PASSWORD + otp(3, 1), CLIENT)
+    assert list(Session.objects.all()) == [session]
+
+
 def test_login_with_a_colon_before_the_otp(alice, otp):
     log_in("alice", f"{PASSWORD}:{otp(3, 1)}", CLIENT)
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from django.conf import settings
+from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.utils import timezone
 
@@ -84,15 +85,14 @@ def start_session(user: User, client: Client) -> tuple[Session, str]:
 
 def find_session(token: str, portal_settings: PortalSettings) -> Session | None:
     """The live session for TOKEN, or None. Records the activity."""
+    now = timezone.now()
     session = (
         Session.objects.select_related("user")
-        .filter(token_hash=_hash(token), revoked_at__isnull=True)
+        .filter(token_hash=_hash(token))
+        .exclude(_ended(portal_settings, now))
         .first()
     )
-    now = timezone.now()
-    if session is None or _expired(session, portal_settings, now):
-        return None
-    if session.user.state not in SIGNED_IN_STATES:
+    if session is None or session.user.state not in SIGNED_IN_STATES:
         return None
     if now - session.last_activity_at >= ACTIVITY_RESOLUTION:
         Session.objects.filter(pk=session.pk).update(last_activity_at=now)
@@ -103,6 +103,18 @@ def find_session(token: str, portal_settings: PortalSettings) -> Session | None:
 def end_session(session: Session) -> None:
     """Sign out: revoke one session."""
     Session.objects.filter(pk=session.pk, revoked_at__isnull=True).update(revoked_at=timezone.now())
+
+
+def purge_ended_sessions(portal_settings: PortalSettings) -> int:
+    """Delete every user's ended sessions: revoked, idle past the timeout, or older than
+    the maximum length. None of them can be used again, and the audit log keeps each
+    sign-in. Run at each successful sign-in, so the table needs no scheduled cleanup.
+
+    Returns:
+        How many sessions were deleted.
+    """
+    deleted, _ = Session.objects.filter(_ended(portal_settings, timezone.now())).delete()
+    return deleted
 
 
 def revoke_sessions(user: User) -> int:
@@ -147,10 +159,15 @@ class SessionMiddleware:
         return response
 
 
-def _expired(session: Session, portal_settings: PortalSettings, now: datetime) -> bool:
+def _ended(portal_settings: PortalSettings, now: datetime) -> Q:
+    """Sessions that have ended: revoked, idle past the timeout, or past the maximum length."""
     idle = timedelta(minutes=portal_settings.idle_timeout_minutes)
     longest = timedelta(hours=portal_settings.max_session_hours)
-    return now - session.last_activity_at >= idle or now - session.created_at >= longest
+    return (
+        Q(revoked_at__isnull=False)
+        | Q(last_activity_at__lte=now - idle)
+        | Q(created_at__lte=now - longest)
+    )
 
 
 def _hash(token: str) -> str:

@@ -13,6 +13,7 @@ from yk_portal.authentication.sessions import (
     client_ip,
     end_session,
     find_session,
+    purge_ended_sessions,
     revoke_sessions,
     start_session,
 )
@@ -128,6 +129,24 @@ def test_admin_changes_end_sessions(make_user, actor, change):
     change(user, actor)
     assert Session.objects.filter(user=user, revoked_at__isnull=True).count() == 0
     assert find_session(token, DEFAULTS) is None
+
+
+def test_purge_deletes_only_ended_sessions(make_user):
+    alice, bob = make_user(), make_user()
+    live = [start_session(alice, CLIENT)[0], start_session(bob, CLIENT)[0]]
+    revoked, idle, old = (start_session(user, CLIENT)[0] for user in (alice, bob, bob))
+    end_session(revoked)
+    age(idle, idle=timedelta(minutes=20))
+    age(old, old=timedelta(hours=12))
+    assert purge_ended_sessions(DEFAULTS) == 3
+    assert set(Session.objects.all()) == set(live)
+
+
+def test_purge_follows_the_settings(make_user):
+    session, _ = start_session(make_user(), CLIENT)
+    age(session, idle=timedelta(minutes=25))
+    assert purge_ended_sessions(PortalSettings(idle_timeout_minutes=30)) == 0
+    assert purge_ended_sessions(DEFAULTS) == 1
 
 
 def test_deleting_a_user_deletes_its_sessions(make_user):

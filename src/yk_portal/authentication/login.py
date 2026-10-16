@@ -27,7 +27,7 @@ from yk_portal.yubikeys.otp import OTP_LENGTH, OtpRejected, Rejection, parse_otp
 from yk_portal.yubikeys.service import accept_otp, find_credential
 
 from .models import Session
-from .sessions import Client, start_session
+from .sessions import Client, purge_ended_sessions, start_session
 
 MESSAGE = "Sign-in failed. Check your username, password and YubiKey."
 
@@ -182,4 +182,5 @@ def _succeed(
             user=account, name=account.username, source_ip=client.source_ip, session_id=session.pk
         )
         record(EventType.LOGIN_SUCCESS, actor, account, details={"state": state})
+    purge_ended_sessions(current_settings())
     return session, token
