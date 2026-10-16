@@ -441,6 +441,13 @@ Adds to spec §25 and §27.
 - Audit events: `SETTING_CHANGED`, `GROUP_CREATED`, `GROUP_UPDATED`,
   `GROUP_DELETED`, `GROUP_MEMBER_ADDED`, `GROUP_MEMBER_REMOVED`,
   `RADIATOR_EXPORT_CREATED`, `RADIATOR_IMPORT_COMPLETED`.
+- Encrypted values (spec §25.4's `encrypted_private_id`, `encrypted_aes_secret`
+  and their nonces) are each stored as one self-describing value instead of a
+  value and a nonce column: version, master key ID, nonce, ciphertext and tag.
+  Each is bound to its table, column and row with AES-GCM associated data, so
+  a value copied to another row or column fails to decrypt.
+- Django's secret key is derived from the master key (spec §22.5), like the
+  other keys, so there is no second secret to manage.
 
 ---
 

@@ -11,7 +11,9 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** project set up; no features yet. Building starts with spec Phase 1.
+**Status:** spec Phase 1 (foundation) done: configuration file, master key,
+AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing, and the user and
+role tables. No web pages yet.
 
 ## Documents
 
@@ -30,17 +32,43 @@ syncs counters from it. It never changes radiator-yubikey itself.
 ## Development
 
 ```bash
-uv sync                          # create .venv with every dependency
-uv run pytest                    # tests
-uv run ruff check .              # lint
-uv run ruff format .             # format
-uv run python manage.py check    # Django's checks, with development settings
+uv sync                                          # create .venv with every dependency
+uv run pytest                                    # tests, on SQLite
+YK_PORTAL_TEST_DATABASE=postgresql uv run pytest # the same tests, on PostgreSQL
+uv run ruff check .                              # lint
+uv run ruff format .                             # format
+uv run ty check                                  # type check
 ```
 
-`manage.py` uses the development settings (`yk_portal.settings.dev`: a local
-`dev.sqlite3` and a public secret key). The installed `yk-portal` command and
-`yk_portal.wsgi` use the production settings, which refuse to load until the
-configuration loader exists (spec Phase 1).
+The PostgreSQL run connects with the usual libpq defaults and environment
+(`PGHOST`, `PGUSER`, ...) as a role that may create databases; it creates and
+drops `test_yk_portal`.
+
+`manage.py` uses the development settings (`yk_portal.settings.dev`), with
+files in the current directory: `dev.sqlite3` and `dev-master.key`.
+
+```bash
+uv run yk-portal master-key-create dev-master.key   # once
+uv run python manage.py migrate
+uv run python manage.py check
+```
+
+## Production configuration
+
+The installed `yk-portal` command and `yk_portal.wsgi` use the production
+settings, built from `/etc/yk-portal/config.toml` (or the file named by
+`$YK_PORTAL_CONFIG`) and the master key it names:
+
+```bash
+sudo install -m 0640 -o root -g yk-portal config.example.toml /etc/yk-portal/config.toml
+sudoedit /etc/yk-portal/config.toml                    # public_base_url, database
+sudo yk-portal master-key-create                       # mode 0600; back it up safely
+sudo chown yk-portal:yk-portal /etc/yk-portal/master.key
+sudo -u yk-portal yk-portal migrate
+```
+
+Django's secret key is derived from the master key, so nothing starts
+without it. Packaging, the service account and systemd come in spec Phase 10.
 
 ## Layout
 

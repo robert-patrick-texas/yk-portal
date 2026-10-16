@@ -1,0 +1,35 @@
+# yk-portal configuration: copy to /etc/yk-portal/config.toml (root:yk-portal, mode 0640).
+#
+# Only settings needed before the database is reachable live here. Timeouts,
+# the portal name and similar settings are changed by admins on the settings
+# page. This file holds no secrets: the PostgreSQL password goes in a passfile,
+# and the master key in its own file. Unknown keys are errors.
+
+[application]
+# Where the application server listens. Only the reverse proxy should reach it.
+listen_address = "127.0.0.1"
+listen_port = 8000
+# The address users browse to, through the reverse proxy. Required.
+public_base_url = "https://yk-portal.example.com"
+
+[database]
+# "sqlite" (the default) or "postgresql".
+backend = "sqlite"
+sqlite_path = "/var/lib/yk-portal/yk-portal.sqlite3"
+# For PostgreSQL: a libpq connection string without a password. Put the
+# password in a passfile (mode 0600, owned by the service account).
+# postgres_dsn = "host=db.example.com dbname=yk_portal user=yk_portal sslmode=verify-full sslrootcert=/etc/yk-portal/db-ca.crt passfile=/etc/yk-portal/pgpass"
+
+[security]
+# Create it with: yk-portal master-key-create (mode 0600). Back it up safely:
+# without it, stored YubiKey secrets and backups can't be decrypted.
+master_key_path = "/etc/yk-portal/master.key"
+
+[proxy]
+# Addresses or networks of the reverse proxy, whose forwarded client
+# addresses are trusted.
+trusted_proxy_addresses = ["127.0.0.1", "::1"]
+
+[logging]
+# DEBUG, INFO, WARNING, ERROR or CRITICAL.
+level = "INFO"

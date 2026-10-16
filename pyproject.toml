@@ -22,9 +22,11 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "django-stubs>=5.2,<5.3",
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
     "ruff>=0.17.1",
+    "ty>=0.0.88",
 ]
 
 [tool.uv]
@@ -33,7 +35,7 @@ required-version = ">=0.13.1"
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "yk_portal.settings.test"
 testpaths = ["tests"]
-addopts = "--strict-markers"
+addopts = "--strict-markers --import-mode=importlib"
 
 [tool.ruff]
 line-length = 100
@@ -42,4 +44,7 @@ line-length = 100
 select = ["E", "W", "F", "I", "B", "UP", "S", "DJ"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S603", "S607"]  # asserts; tests run openssl and perl
+
+[tool.ty.terminal]
+error-on-warning = true

@@ -57,6 +57,9 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+# The master key file (spec §22.4); production takes it from the configuration.
+YK_MASTER_KEY_PATH = "/etc/yk-portal/master.key"
+
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = "Strict"
 CSRF_COOKIE_SECURE = True
