@@ -90,6 +90,17 @@ flow (spec §16, including the OTP), with the password checked against the
 SHA-512 hash; on success, the Argon2id `password_hash` is created from the
 password typed. A failure counts toward lockout like any other.
 
+2.9 The web login also accepts `password:OTP`, as Radiator does: one `:`
+right before the OTP is dropped before the password is checked (a password
+can't end with `:`, section 2.6). The standard form, the one the login page
+asks for, stays the password followed directly by the OTP; the colon form is
+tolerated, not offered.
+
+2.10 PROVISIONING accounts lock too. Consecutive failed logins with the
+temporary password count toward the failed-login limit (section 3.2) as
+spec §18.1 says, and reaching it moves the account from PROVISIONING to
+LOCKED. This adds PROVISIONING -> LOCKED to the transitions of spec §7.1.
+
 ---
 
 ## 3. Admin settings page
@@ -488,3 +499,5 @@ Adds to spec §25 and §27.
 | 2026-10-16 | Counter sync from Radiator is part of the importer | 7.5 |
 | 2026-10-16 | The SHA-512 hash is not additionally encrypted | 2.7 |
 | 2026-10-16 | Python 3.14.4+, uv 0.13.1+, Django LTS, server-rendered pages | 10 |
+| 2026-10-16 | The web login tolerates `password:OTP`; password + OTP stays the standard form | 2.9 |
+| 2026-10-16 | PROVISIONING accounts lock after consecutive failed logins reach the limit | 2.10 |
