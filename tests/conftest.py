@@ -4,6 +4,7 @@ import pytest
 
 from yk_portal.accounts.models import AccountState, Role, User
 from yk_portal.audit.service import Actor
+from yk_portal.core.master_key import create_master_key
 
 _numbers = itertools.count(1)
 
@@ -11,6 +12,20 @@ _numbers = itertools.count(1)
 @pytest.fixture
 def actor() -> Actor:
     return Actor.cli()
+
+
+@pytest.fixture(scope="session")
+def master_key_path(tmp_path_factory) -> str:
+    path = tmp_path_factory.mktemp("master-key") / "master.key"
+    create_master_key(path)
+    return str(path)
+
+
+@pytest.fixture
+def master_key(master_key_path, settings) -> str:
+    """A master key for the test, for stored YubiKey secrets."""
+    settings.YK_MASTER_KEY_PATH = master_key_path
+    return master_key_path
 
 
 @pytest.fixture

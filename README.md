@@ -11,11 +11,13 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 and 2 done: configuration file, master key,
+**Status:** spec Phases 1 to 3 done: configuration file, master key,
 AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and their
 states, temporary passwords, the password policy, roles with last-admin
 protection, groups, the database-backed settings and audit events, and the
-`bootstrap-admin`, `create-admin` and `reset-admin` commands. No web pages yet.
+`bootstrap-admin`, `create-admin` and `reset-admin` commands; YubiKey
+credentials with encrypted secrets, and Yubico OTP checking (ModHex, AES-128,
+CRC, private ID, replay counters saved atomically). No web pages yet.
 
 ## Documents
 
@@ -44,7 +46,14 @@ uv run ty check                                  # type check
 
 The PostgreSQL run connects with the usual libpq defaults and environment
 (`PGHOST`, `PGUSER`, ...) as a role that may create databases; it creates and
-drops `test_yk_portal`.
+drops `test_yk_portal`. It also runs the test that submits one OTP from
+several threads at once.
+
+`tests/yubikeys/test_radiator_crosscheck.py` checks OTP verdicts and stored
+counters against radiator-yubikey's `tests/make-otp.sh` and `yubikey-db.sh
+verify` (addendum §8.2), without changing radiator-yubikey. It uses the
+checkout at `../radiator-yubikey` (or `$YK_PORTAL_RADIATOR_YUBIKEY`) and needs
+`sqlite3`, `openssl` and `libcrypt-rijndael-perl`; without them it is skipped.
 
 `manage.py` uses the development settings (`yk_portal.settings.dev`), with
 files in the current directory: `dev.sqlite3` and `dev-master.key`.
