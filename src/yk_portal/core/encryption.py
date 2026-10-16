@@ -10,13 +10,15 @@ so a value copied to another row or column fails to decrypt.
 """
 
 import functools
+import hashlib
+import hmac
 import os
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .master_key import derive_keys, load_master_key
+from .master_key import DerivedKeys, derive_keys, load_master_key
 
 VERSION = 1
 _KEY_ID_BYTES = 8
@@ -68,13 +70,28 @@ def _associated_data(header: bytes, context: str) -> bytes:
 
 
 @functools.cache
-def _secret_box_for(path: Path) -> SecretBox:
+def _keys_for(path: Path) -> tuple[DerivedKeys, SecretBox]:
     keys = derive_keys(load_master_key(path))
-    return SecretBox(keys.secrets, keys.key_id)
+    return keys, SecretBox(keys.secrets, keys.key_id)
+
+
+def _keys() -> tuple[DerivedKeys, SecretBox]:
+    from django.conf import settings
+
+    return _keys_for(Path(settings.YK_MASTER_KEY_PATH))
 
 
 def secret_box() -> SecretBox:
     """The SecretBox for stored secrets, from the master key named by the settings."""
-    from django.conf import settings
+    return _keys()[1]
 
-    return _secret_box_for(Path(settings.YK_MASTER_KEY_PATH))
+
+def lookup_digest(value: bytes, purpose: str) -> str:
+    """HMAC-SHA256 of VALUE with a key derived from the master key, as hex.
+
+    Stored next to an encrypted value, it lets a unique index cover the value
+    without revealing it: unkeyed, a short value such as a 6-byte private ID
+    could be found by trying every one. Master key rotation recomputes it.
+    """
+    message = purpose.encode() + b"\0" + value
+    return hmac.new(_keys()[0].lookup, message, hashlib.sha256).hexdigest()

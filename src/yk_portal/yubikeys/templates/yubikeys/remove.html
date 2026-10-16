@@ -1,0 +1,16 @@
+{% extends "web/base.html" %}
+{% block title %}Remove a YubiKey · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Remove YubiKey <code>{{ credential.public_id }}</code>?</h1>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <p>{{ credential.label|default:"This YubiKey" }} is deleted from {{ portal.portal_name }}, with its secrets.</p>
+  <p class="notice">If it is lost, disable it instead. A removed YubiKey keeps working with Radiator until an administrator removes it there too; a disabled one stops at the next update.</p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="danger">Remove it</button>
+  </form>
+  <p><a href="{% url 'yubikeys' %}">Keep it</a></p>
+</section>
+{% endblock %}

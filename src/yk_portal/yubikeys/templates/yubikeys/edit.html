@@ -1,0 +1,15 @@
+{% extends "web/base.html" %}
+{% block title %}Edit a YubiKey · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>YubiKey <code>{{ credential.public_id }}</code></h1>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/field.html" with field=form.label %}
+    {% include "web/field.html" with field=form.slot %}
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <p><a href="{% url 'yubikeys' %}">Back</a></p>
+</section>
+{% endblock %}

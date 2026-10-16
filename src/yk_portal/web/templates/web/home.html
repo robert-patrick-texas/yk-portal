@@ -1,5 +1,10 @@
 {% extends "web/base.html" %}
 {% block content %}
-<h1>Signed in as {{ account.username }}</h1>
-<p class="muted">Your YubiKeys and account details come in a later version of this page.</p>
+<h1>{{ account.username }}</h1>
+<dl class="facts">
+  <dt>Email</dt><dd>{{ account.email|default:"—" }}</dd>
+  <dt>Groups</dt><dd>{% for group in account.groups.all %}{{ group.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</dd>
+  <dt>Last sign-in</dt><dd>{{ account.last_login_at|date:"Y-m-d H:i" }} UTC</dd>
+</dl>
+<p><a href="{% url 'yubikeys' %}">Your YubiKeys</a></p>
 {% endblock %}

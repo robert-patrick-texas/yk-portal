@@ -11,15 +11,16 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 4 done: configuration file, master key,
-AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and their
-states, temporary passwords, the password policy, roles with last-admin
-protection, groups, the database-backed settings and audit events, and the
-`bootstrap-admin`, `create-admin` and `reset-admin` commands; YubiKey
-credentials with encrypted secrets and Yubico OTP checking; the sign-in page
-(password + OTP, or the temporary password for a new account), lockout,
-sessions with idle and maximum-length limits, sign-out, and light and dark
-themes. Onboarding, YubiKey management and the admin pages come next.
+**Status:** spec Phases 1 to 5 done, except the radiator-yubikey import and
+export: configuration file, master key, AES-256-GCM encryption, Argon2id and
+SHA-512 crypt hashing; accounts and their states, temporary passwords, the
+password policy, roles with last-admin protection, groups, the database-backed
+settings and audit events, and the `bootstrap-admin`, `create-admin` and
+`reset-admin` commands; YubiKey credentials with encrypted secrets and Yubico
+OTP checking; the sign-in page, lockout, sessions and themes; onboarding
+(email, permanent password, then adding and testing a YubiKey, or testing one
+an admin set up), and each user's YubiKey pages (add, test, edit, disable,
+remove). The admin pages come next.
 
 ## Documents
 

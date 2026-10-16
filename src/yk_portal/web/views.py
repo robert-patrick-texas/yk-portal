@@ -3,7 +3,7 @@ from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
 
 from yk_portal.accounts.models import Theme
-from yk_portal.authentication.access import active_required, provisioning_required
+from yk_portal.authentication.access import active_required
 from yk_portal.authentication.sessions import PortalRequest
 
 from .context_processors import THEME_COOKIE
@@ -12,12 +12,6 @@ from .context_processors import THEME_COOKIE
 @active_required
 def home(request: PortalRequest) -> HttpResponse:
     return render(request, "web/home.html")
-
-
-@provisioning_required
-def welcome(request: PortalRequest) -> HttpResponse:
-    """Where a PROVISIONING account lands. Onboarding comes in spec Phase 5."""
-    return render(request, "web/welcome.html")
 
 
 def set_theme(request: PortalRequest) -> HttpResponse:

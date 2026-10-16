@@ -149,3 +149,79 @@ button.primary {
   border-radius: 6px;
   cursor: pointer;
 }
+
+.nav { display: flex; gap: 1rem; margin-right: auto; margin-left: 1rem; }
+.nav a { color: var(--text); }
+
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.75rem; overflow-x: auto; }
+
+.field select {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.success { background: var(--notice-bg); border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; }
+.step-note { font-weight: 600; margin: 1.5rem 0 0.5rem; }
+
+.howto { margin: 0 0 1rem; }
+.howto summary { cursor: pointer; color: var(--accent); }
+
+.steps { padding-left: 1.25rem; }
+.steps li { margin: 0 0 0.75rem; }
+.steps .status { color: var(--muted); font-size: 0.875rem; margin-left: 0.5rem; }
+.steps li.done .status { color: var(--text); font-weight: 600; }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+
+.table-wrap { overflow-x: auto; }
+table.list { width: 100%; border-collapse: collapse; background: var(--surface); }
+table.list th, table.list td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.list th { font-size: 0.875rem; color: var(--muted); font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: baseline; }
+.actions form { margin: 0; }
+.actions-row { display: flex; gap: 1.5rem; }
+
+button.danger {
+  width: 100%;
+  padding: 0.6rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--surface);
+  background: var(--error);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A masked field and its Show/Hide button (reveal.js). */
+.reveal { display: flex; gap: 0.5rem; align-items: stretch; }
+.reveal input { flex: 1; min-width: 0; }
+.reveal-toggle {
+  flex: none;
+  min-width: 4.5rem;
+  padding: 0 0.75rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}

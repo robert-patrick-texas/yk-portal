@@ -81,7 +81,7 @@ def test_sign_in_and_out(client, alice, passcode):
     cookie = response.cookies[COOKIE]
     assert cookie["httponly"] and cookie["secure"] and cookie["samesite"] == "Strict"
     assert not cookie["max-age"]  # ends with the browser session
-    assert "Signed in as alice" in client.get(reverse("home")).content.decode()
+    assert "<h1>alice</h1>" in client.get(reverse("home")).content.decode()
 
     assert client.get(reverse("logout")).status_code == 405
     response = client.post(reverse("logout"))
@@ -132,19 +132,19 @@ def test_login_needs_the_csrf_token(alice, passcode):
 
 def test_anonymous_users_are_sent_to_sign_in(client, db):
     assert client.get(reverse("home")).headers["Location"] == reverse("login")
-    assert client.get(reverse("welcome")).headers["Location"] == reverse("login")
+    assert client.get(reverse("provision")).headers["Location"] == reverse("login")
 
 
 def test_provisioning_sessions_are_restricted_to_onboarding(client, actor):
     account = services.create_user("nina", actor)
     sign_in(client, "nina", account.temporary_password)
-    assert client.get(reverse("home")).headers["Location"] == reverse("welcome")
-    assert "Set up your account" in client.get(reverse("welcome")).content.decode()
+    assert client.get(reverse("home")).headers["Location"] == reverse("provision")
+    assert "Set up your account" in client.get(reverse("provision")).content.decode()
 
 
 def test_active_accounts_skip_onboarding(client, alice, passcode):
     sign_in(client, "alice", passcode(1))
-    assert client.get(reverse("welcome")).headers["Location"] == reverse("home")
+    assert client.get(reverse("provision")).headers["Location"] == reverse("home")
 
 
 def test_a_disabled_account_is_signed_out(client, alice, passcode, actor):
@@ -203,12 +203,35 @@ def test_an_unknown_theme_is_ignored(client, db):
 
 
 def test_templates_have_no_inline_scripts_or_styles():
-    """Addendum §4.4: a strict Content-Security-Policy must work."""
-    inline = re.compile(r"<script|<style|\sstyle=|\son[a-z]+=", re.IGNORECASE)
+    """Addendum §4.4: a strict Content-Security-Policy must work. Scripts are files."""
+    inline = re.compile(
+        r"<script(?![^>]*\ssrc=)|<script[^>]*>[^<]+</script>|<style|\sstyle=|\son[a-z]+=",
+        re.IGNORECASE,
+    )
     templates = list(SRC.glob("*/templates/**/*.html"))
     assert templates
     for template in templates:
         assert not inline.search(template.read_text()), template
+
+
+def test_pages_load_the_show_hide_script(client, db):
+    html = client.get(reverse("login")).content.decode()
+    assert '<script src="/static/web/reveal.js" defer></script>' in html
+    assert (SRC / "web" / "static" / "web" / "reveal.js").is_file()
+
+
+def masked_fields(html: str) -> set[str]:
+    """Names of the inputs shown masked, with a show/hide button."""
+    names = set()
+    for tag in re.findall(r"<input [^>]*>", html):
+        name = re.search(r'name="(\w+)"', tag)
+        if name and 'type="password"' in tag and "data-reveal" in tag:
+            names.add(name.group(1))
+    return names
+
+
+def test_the_passcode_is_masked_with_a_show_button(client, db):
+    assert masked_fields(client.get(reverse("login")).content.decode()) == {"passcode"}
 
 
 def test_provisioning_lockout_through_the_page(client, actor):

@@ -32,6 +32,8 @@ class DerivedKeys:
     key_id: bytes
     secrets: bytes = field(repr=False)
     backup: bytes = field(repr=False)
+    # For keyed digests that let a unique index cover an encrypted value.
+    lookup: bytes = field(repr=False)
     django_secret_key: str = field(repr=False)
 
 
@@ -93,5 +95,6 @@ def derive_keys(master_key: bytes) -> DerivedKeys:
         key_id=derive("key-id", 8),
         secrets=derive("stored-secrets"),
         backup=derive("backup"),
+        lookup=derive("lookup-digest"),
         django_secret_key=derive("django-secret-key").hex(),
     )

@@ -26,7 +26,7 @@ def active_required(view: View) -> View:
         if request.account is None:
             return redirect("login")
         if request.account.state != AccountState.ACTIVE:
-            return redirect("welcome")
+            return redirect("provision")
         return view(request, *args, **kwargs)
 
     return check

@@ -10,13 +10,17 @@ from typing import ClassVar
 from django.db import models
 
 from yk_portal.accounts.models import User
-from yk_portal.core.encryption import secret_box
+from yk_portal.core.encryption import lookup_digest, secret_box
 
 from .otp import USAGE_COUNTER_MASK
 from .validators import validate_label, validate_public_id
 
 PRIVATE_ID_BYTES = 6
 AES_KEY_BYTES = 16
+
+
+def private_id_digest(private_id: bytes) -> str:
+    return lookup_digest(private_id, "yubikey_credentials.private_id")
 
 
 class ProvisioningMethod(models.TextChoices):
@@ -33,6 +37,9 @@ class YubikeyCredential(models.Model):
     slot_number = models.PositiveSmallIntegerField(null=True, blank=True)
     public_id = models.CharField(max_length=12, unique=True, validators=[validate_public_id])
     encrypted_private_id = models.BinaryField()
+    # A keyed digest of the private ID, so no two credentials share one: radiator-yubikey
+    # replaces a row with the same private ID, even another user's (addendum §6.4).
+    private_id_digest = models.CharField(max_length=64, unique=True)
     encrypted_aes_secret = models.BinaryField()
     enabled = models.BooleanField(default=True)
     # The last accepted OTP's counters, as radiator-yubikey stores them (addendum §8).
@@ -83,6 +90,7 @@ class YubikeyCredential(models.Model):
         """Encrypt and set the private ID (6 bytes) and AES key (16 bytes). Doesn't save."""
         if len(private_id) != PRIVATE_ID_BYTES or len(aes_key) != AES_KEY_BYTES:
             raise ValueError("a private ID is 6 bytes and an AES key 16 bytes")
+        self.private_id_digest = private_id_digest(private_id)
         box = secret_box()
         self.encrypted_private_id = box.encrypt(private_id, self._context("private_id"))
         self.encrypted_aes_secret = box.encrypt(aes_key, self._context("aes_secret"))

@@ -1,0 +1,8 @@
+{% include "web/form_errors.html" %}
+{% include "web/field.html" with field=form.public_id %}
+{% include "web/field.html" with field=form.private_id %}
+{% include "web/field.html" with field=form.aes_key %}
+{% include "web/field.html" with field=form.slot %}
+{% include "web/field.html" with field=form.label %}
+<p class="step-note">Now touch the YubiKey once, to show the values are right.</p>
+{% include "web/field.html" with field=form.otp %}

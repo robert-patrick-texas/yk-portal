@@ -89,9 +89,20 @@ def _check_temporary_password(user: User, passcode: str, actor: Actor) -> None:
         _refuse(actor, user, "temporary password expired")
 
 
-def _check_password_and_otp(user: User, passcode: str, actor: Actor) -> str:
+def confirm_identity(user: User, passcode: str, client: Client) -> None:
+    """Step-up: the signed-in user's password and a fresh OTP again, before revealing a
+    YubiKey secret (spec §20.2, addendum §3.2). A failure counts like a failed login.
+
+    Raises:
+        LoginFailed: The passcode isn't good.
+    """
+    actor = Actor(user=user, name=user.username, source_ip=client.source_ip)
+    _check_password_and_otp(user, passcode, actor, "step-up: ")
+
+
+def _check_password_and_otp(user: User, passcode: str, actor: Actor, context: str = "") -> str:
     """Returns the Argon2id hash to store for an imported account's first web login
-    (addendum §2.8), else ""."""
+    (addendum §2.8), else "". CONTEXT prefixes the audited reason of a failure."""
     password, otp_text = split_passcode(passcode)
     password_ok = _check_password(user, password)
     try:
@@ -101,10 +112,10 @@ def _check_password_and_otp(user: User, passcode: str, actor: Actor) -> str:
         credential = find_credential(user, otp.public_id)
         if not password_ok:
             # Checked before the OTP, so a wrong password doesn't use the OTP up.
-            _count_failure(user, actor, "wrong password")
+            _count_failure(user, actor, context + "wrong password")
         accept_otp(credential, otp)
     except OtpRejected as e:
-        _count_failure(user, actor, e.reason.value)
+        _count_failure(user, actor, context + e.reason.value)
     return "" if user.password_hash else hash_web_password(password)
 
 

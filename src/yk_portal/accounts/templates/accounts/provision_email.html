@@ -1,0 +1,14 @@
+{% extends "web/base.html" %}
+{% block title %}Email address · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Your email address</h1>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/field.html" with field=form.email %}
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <p><a href="{% url 'provision' %}">Back</a></p>
+</section>
+{% endblock %}

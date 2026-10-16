@@ -27,6 +27,7 @@ from yk_portal.authentication.passwords import (
 )
 from yk_portal.authentication.sessions import revoke_sessions
 from yk_portal.portal_settings.service import current as current_settings
+from yk_portal.yubikeys.models import YubikeyCredential
 
 from .models import AccountState, Group, Role, User
 from .validators import validate_username
@@ -173,7 +174,7 @@ def unlock(user: User, actor: Actor) -> None:
 def reset_to_provisioning(user: User, actor: Actor) -> str:
     """ACTIVE, LOCKED or DISABLED -> PROVISIONING with a new temporary password (spec §15).
 
-    Ends the account's sessions.
+    Ends the account's sessions and disables its YubiKeys.
 
     Returns:
         The new temporary password, shown once to the admin.
@@ -191,7 +192,13 @@ def reset_to_provisioning(user: User, actor: Actor) -> str:
             temporary_password_expires_at=_temporary_expiry(),
         )
         revoke_sessions(account)
-    # Phase 5: disable its YubiKeys.
+        # Disabled, not deleted: a lost YubiKey can't be used, and admins still see it.
+        enabled = YubikeyCredential.objects.filter(user=account, enabled=True)
+        public_ids = sorted(enabled.values_list("public_id", flat=True))
+        if public_ids:
+            enabled.update(enabled=False, updated_at=timezone.now())
+            details = {"public_ids": public_ids, "reason": "reset to provisioning"}
+            record(EventType.YUBIKEY_DISABLED, actor, account, details=details)
     return temporary
 
 
@@ -232,6 +239,64 @@ def set_password(user: User, password: str, actor: Actor) -> None:
         account.radius_password_hash = hashes.radius
         account.save()
         record(EventType.PASSWORD_CHANGED, actor, account)
+
+
+def set_email(user: User, email: str, actor: Actor) -> None:
+    """Set the account's email address, informational only (spec §24).
+
+    The audit event names the change, not the address (spec §26).
+
+    Raises:
+        ValidationError: Not an email address.
+    """
+    email = email.strip()
+    if email:
+        validate_email(email)
+    with _account(user) as account:
+        if account.email == email:
+            return
+        account.email = email
+        account.save()
+        record(EventType.ACCOUNT_UPDATED, actor, account, details={"changed": ["email"]})
+
+
+def complete_provisioning(user: User, actor: Actor) -> None:
+    """PROVISIONING -> ACTIVE: onboarding is done (spec §13.2). The temporary password
+    stops working.
+
+    Call it only after the user tested an enabled YubiKey in the same transaction, as
+    yk_portal.accounts.onboarding does.
+
+    Raises:
+        ValidationError: The account has no email address, permanent password or
+            enabled YubiKey.
+    """
+    with _account(user, {PROVISIONING}) as account:
+        check_ready_to_finish(account)
+        if not YubikeyCredential.objects.filter(user=account, enabled=True).exists():
+            raise ValidationError("Add a YubiKey first.", code="no_yubikey")
+        _set_state(
+            account,
+            actor,
+            ACTIVE,
+            EventType.PROVISIONING_COMPLETED,
+            failed_login_count=0,
+            temporary_password_hash="",
+            temporary_password_expires_at=None,
+        )
+
+
+def check_ready_to_finish(user: User) -> None:
+    """Whether onboarding has the email address and permanent password it needs before
+    the YubiKey step.
+
+    Raises:
+        ValidationError: One of them is missing.
+    """
+    if not user.email:
+        raise ValidationError("Set your email address first.", code="no_email")
+    if not user.password_hash:
+        raise ValidationError("Set a permanent password first.", code="no_password")
 
 
 def grant_admin(user: User, actor: Actor) -> None:

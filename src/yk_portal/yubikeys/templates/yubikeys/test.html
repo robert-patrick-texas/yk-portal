@@ -1,0 +1,15 @@
+{% extends "web/base.html" %}
+{% block title %}Test a YubiKey · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Test a YubiKey</h1>
+  {% if tested %}<p class="success" role="status">It works: {{ tested.label|default:tested.public_id }}.</p>{% endif %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/field.html" with field=form.otp %}
+    <button type="submit" class="primary">Test</button>
+  </form>
+  <p><a href="{% url 'yubikeys' %}">Back</a></p>
+</section>
+{% endblock %}

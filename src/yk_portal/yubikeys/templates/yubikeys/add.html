@@ -1,0 +1,15 @@
+{% extends "web/base.html" %}
+{% block title %}Add a YubiKey · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Add a YubiKey</h1>
+  {% include "yubikeys/ykman.html" %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "yubikeys/form.html" %}
+    <button type="submit" class="primary">Add it</button>
+  </form>
+  <p><a href="{% url 'yubikeys' %}">Back</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,6 @@
+<details class="howto">
+  <summary>How to program a YubiKey with ykman</summary>
+  <p>On a trusted computer with the YubiKey Manager (<code>ykman</code>), program slot 2, which types an OTP on a long touch:</p>
+  <pre><code>ykman otp yubico 2 --serial-public-id --generate-private-id --generate-key</code></pre>
+  <p>It shows a public ID, a private ID and a secret key: enter them below. Slot 1's factory setting can't be restored once replaced, so use slot 2 unless you're sure. Don't add <code>--upload</code>: it sends the key to Yubico.</p>
+</details>

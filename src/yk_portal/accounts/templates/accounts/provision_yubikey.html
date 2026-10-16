@@ -1,0 +1,25 @@
+{% extends "web/base.html" %}
+{% block title %}Your YubiKey · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  {% if form.public_id %}
+  <h1>Add your YubiKey</h1>
+  {% include "yubikeys/ykman.html" %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "yubikeys/form.html" %}
+    <button type="submit" class="primary">Add it and finish</button>
+  </form>
+  {% else %}
+  <h1>Test your YubiKey</h1>
+  <p>An administrator set up a YubiKey for you. Touch it once to show it works.</p>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/field.html" with field=form.otp %}
+    <button type="submit" class="primary">Test it and finish</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'provision' %}">Back</a></p>
+</section>
+{% endblock %}

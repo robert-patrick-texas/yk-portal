@@ -1,0 +1,27 @@
+{% extends "web/base.html" %}
+{% block title %}Set up your account · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Set up your account</h1>
+  <p>You signed in with a temporary password. Three steps, and your account is ready.</p>
+  <ol class="steps">
+    <li class="{% if email_done %}done{% endif %}">
+      <a href="{% url 'provision-email' %}">Your email address</a>
+      <span class="status">{% if email_done %}Done{% else %}To do{% endif %}</span>
+    </li>
+    <li class="{% if password_done %}done{% endif %}">
+      <a href="{% url 'provision-password' %}">{% if password_done %}Your permanent password (change it if you like){% else %}A permanent password{% endif %}</a>
+      <span class="status">{% if password_done %}Done{% else %}To do{% endif %}</span>
+    </li>
+    <li>
+      {% if email_done and password_done %}
+      <a href="{% url 'provision-yubikey' %}">{% if new_yubikey %}Add your YubiKey{% else %}Test your YubiKey{% endif %}</a>
+      {% else %}
+      <span>{% if new_yubikey %}Add your YubiKey{% else %}Test your YubiKey{% endif %}</span>
+      {% endif %}
+      <span class="status">Last step</span>
+    </li>
+  </ol>
+</section>
+{% endblock %}

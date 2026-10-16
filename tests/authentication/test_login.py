@@ -6,7 +6,13 @@ from django.utils import timezone
 from yk_portal.accounts import services
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import AuditEvent, EventType, Result
-from yk_portal.authentication.login import MESSAGE, LoginFailed, log_in, split_passcode
+from yk_portal.authentication.login import (
+    MESSAGE,
+    LoginFailed,
+    confirm_identity,
+    log_in,
+    split_passcode,
+)
 from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import check_web_password, hash_password
 from yk_portal.authentication.sessions import Client, start_session
@@ -300,3 +306,21 @@ def test_an_expired_temporary_password_is_refused_without_counting(newcomer):
 def test_the_temporary_password_doesnt_take_an_otp(newcomer, otp):
     refused("nina", newcomer.temporary_password + otp(3, 1))
     assert last_event().details["reason"] == "wrong temporary password"
+
+
+# Step-up before revealing a secret (spec §20.2)
+
+
+def test_confirm_identity(alice, otp):
+    confirm_identity(alice, PASSWORD + otp(3, 1), CLIENT)
+    credential = YubikeyCredential.objects.get(public_id=PUBLIC_ID)
+    assert (credential.last_usage_counter, credential.last_session_counter) == (3, 1)
+
+
+def test_failed_step_ups_count_and_lock(alice, otp):
+    for session_counter in (1, 2, 3):
+        with pytest.raises(LoginFailed):
+            confirm_identity(alice, "wrong-pw1" + otp(3, session_counter), CLIENT)
+    failures = AuditEvent.objects.filter(event_type=EventType.LOGIN_FAILURE)
+    assert {e.details["reason"] for e in failures} == {"step-up: wrong password"}
+    assert fresh(alice).state == L

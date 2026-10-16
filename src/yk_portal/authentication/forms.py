@@ -10,5 +10,5 @@ class LoginForm(forms.Form):
     passcode = forms.CharField(
         max_length=256,
         strip=False,
-        widget=forms.PasswordInput(attrs={"autocomplete": "off"}),
+        widget=forms.PasswordInput(attrs={"autocomplete": "off", "data-reveal": True}),
     )

@@ -63,6 +63,7 @@ K1 = "6b1f0a9d2c7e4f3a8b5d0c1e9f2a7b6d"
 K2 = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 _public_ids = (f"vvcccccc{modhex.encode(n.to_bytes(2))}" for n in itertools.count(1))
+_private_ids = (f"{n:012x}" for n in itertools.count(1))
 
 
 def _make_otp(public_id: str, private_id: str, aes_key: str, counter: int, session: int = 0) -> str:
@@ -104,7 +105,7 @@ def make_credential(master_key, make_user):
     def make(
         user: User | None = None,
         public_id: str = "",
-        private_id: str = "4a6f8e2d1c3b",
+        private_id: str = "",
         aes_key: str = K1,
         **fields: object,
     ) -> YubikeyCredential:
@@ -112,7 +113,9 @@ def make_credential(master_key, make_user):
         credential = YubikeyCredential(
             user=user or make_user(), public_id=public_id or next(_public_ids), **fields
         )
-        credential.set_secrets(bytes.fromhex(private_id), bytes.fromhex(aes_key))
+        credential.set_secrets(
+            bytes.fromhex(private_id or next(_private_ids)), bytes.fromhex(aes_key)
+        )
         credential.save()
         return credential
 
