@@ -11,9 +11,11 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phase 1 (foundation) done: configuration file, master key,
-AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing, and the user and
-role tables. No web pages yet.
+**Status:** spec Phases 1 and 2 done: configuration file, master key,
+AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and their
+states, temporary passwords, the password policy, roles with last-admin
+protection, groups, the database-backed settings and audit events, and the
+`bootstrap-admin`, `create-admin` and `reset-admin` commands. No web pages yet.
 
 ## Documents
 
@@ -65,10 +67,28 @@ sudoedit /etc/yk-portal/config.toml                    # public_base_url, databa
 sudo yk-portal master-key-create                       # mode 0600; back it up safely
 sudo chown yk-portal:yk-portal /etc/yk-portal/master.key
 sudo -u yk-portal yk-portal migrate
+sudo -u yk-portal yk-portal bootstrap-admin            # the first admin; prints a temporary password
 ```
 
 Django's secret key is derived from the master key, so nothing starts
 without it. Packaging, the service account and systemd come in spec Phase 10.
+
+## Administrative commands
+
+Run as the yk-portal service account (`sudo -u yk-portal yk-portal ...`), or
+with `uv run python manage.py ...` in development. Each command records an
+audit event naming the operating-system user (and the `sudo` caller).
+
+| Command | What it does |
+|---|---|
+| `bootstrap-admin [USERNAME]` | Creates the first admin account; refused once any admin exists. Prompts for the username if it isn't given |
+| `create-admin USERNAME [--email EMAIL]` | Creates another admin account |
+| `reset-admin USERNAME` | Gives an admin account a new temporary password and puts it in PROVISIONING: the way back in when no admin can sign in |
+
+New accounts start in PROVISIONING with the roles `user` (and `admin`), the
+default group if one is set, and a generated temporary password that is
+printed once and expires after the temporary password lifetime setting
+(72 hours by default).
 
 ## Layout
 

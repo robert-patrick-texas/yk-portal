@@ -1,4 +1,4 @@
-"""Accounts and roles (spec §6, §7, §23, §25.1-§25.3; addendum §12)."""
+"""Accounts, roles and groups (spec §6, §7, §23, §25.1-§25.3; addendum §5, §12)."""
 
 import uuid
 from typing import ClassVar
@@ -6,7 +6,7 @@ from typing import ClassVar
 from django.db import models
 from django.db.models.functions import Lower
 
-from .validators import validate_username
+from .validators import validate_group_name, validate_username
 
 
 class AccountState(models.TextChoices):
@@ -58,6 +58,7 @@ class User(models.Model):
     failed_login_count = models.PositiveSmallIntegerField(default=0)
     theme = models.CharField(max_length=8, choices=Theme.choices, default=Theme.BROWSER)
     roles = models.ManyToManyField(Role, through="UserRole", related_name="users")
+    groups = models.ManyToManyField("Group", through="UserGroup", related_name="users")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_login_at = models.DateTimeField(null=True, blank=True)
@@ -81,6 +82,10 @@ class User(models.Model):
     def __str__(self) -> str:
         return self.username
 
+    @property
+    def is_admin(self) -> bool:
+        return UserRole.objects.filter(user=self, role__name=Role.ADMIN).exists()
+
 
 class UserRole(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -97,3 +102,42 @@ class UserRole(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user} has {self.role}"
+
+
+class Group(models.Model):
+    """An admin-defined group. Grants nothing inside yk-portal (addendum §5.6)."""
+
+    # Immutable, so a rename changes only the name (addendum §5.2).
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=64, validators=[validate_group_name])
+    description = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects: ClassVar[models.Manager[Group]] = models.Manager["Group"]()
+
+    class Meta:
+        db_table = "groups"
+        constraints = [
+            models.UniqueConstraint(Lower("name"), name="groups_name_unique_any_case"),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class UserGroup(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="user_groups")
+    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="user_groups")
+
+    objects: ClassVar[models.Manager[UserGroup]] = models.Manager["UserGroup"]()
+
+    class Meta:
+        db_table = "user_groups"
+        constraints = [
+            models.UniqueConstraint(fields=["user", "group"], name="user_groups_user_group_unique"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user} in {self.group}"
