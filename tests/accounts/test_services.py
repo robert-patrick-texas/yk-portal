@@ -137,6 +137,34 @@ def test_groups_given_replace_the_default(actor):
     assert not services.create_user("bob", actor, groups=[]).user.groups.exists()
 
 
+def test_create_migrated_user(actor):
+    netops = create_group("netops", actor)
+    portal_settings.update({"default_group": netops.pk}, actor)
+    user = services.create_migrated_user("alice", actor, "test")
+    user = User.objects.get(pk=user.pk)
+    assert user.state == A
+    assert roles(user) == {"user"}
+    assert list(user.groups.all()) == [netops]
+    assert (user.email, user.temporary_password_hash) == ("", "")
+    assert user.temporary_password_expires_at is None
+    event = AuditEvent.objects.get(event_type=EventType.ACCOUNT_CREATED)
+    assert event.details == {"roles": ["user"], "groups": ["netops"], "source": "test"}
+
+
+@pytest.mark.parametrize(
+    ("username", "code"), [("Alice", "invalid_username"), ("svc.x", "reserved_username")]
+)
+def test_create_migrated_user_takes_the_username_as_it_is(actor, username, code):
+    with raises(code):
+        services.create_migrated_user(username, actor, "test")
+
+
+def test_create_migrated_user_needs_a_free_username(actor, make_user):
+    make_user("alice")
+    with raises("username_taken"):
+        services.create_migrated_user("alice", actor, "test")
+
+
 def test_bootstrap_admin(actor, make_user):
     make_user("bob")  # an ordinary account doesn't stop the bootstrap
     account = services.bootstrap_admin("Root.Admin", actor)

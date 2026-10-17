@@ -11,16 +11,17 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 5 done, except the radiator-yubikey import and
-export: configuration file, master key, AES-256-GCM encryption, Argon2id and
-SHA-512 crypt hashing; accounts and their states, temporary passwords, roles
-with last-admin protection, groups, the database-backed settings and audit
-events, and the `bootstrap-admin`, `create-admin` and `reset-admin`
-commands; YubiKey credentials with encrypted secrets, a PIN each, and Yubico
-OTP checking; the sign-in page, lockout counted per YubiKey, sessions and
-themes; onboarding (email, then adding a YubiKey and its PIN, or testing one
-an admin set up and choosing its PIN), and each user's YubiKey pages (add,
-test, edit, set the PIN, disable, remove). The admin pages come next.
+**Status:** spec Phases 1 to 5 done: configuration file, master key,
+AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and
+their states, temporary passwords, roles with last-admin protection, groups,
+the database-backed settings and audit events, and the `bootstrap-admin`,
+`create-admin` and `reset-admin` commands; YubiKey credentials with
+encrypted secrets, a PIN each, and Yubico OTP checking; the sign-in page,
+lockout counted per YubiKey, sessions and themes; onboarding (email, then
+adding a YubiKey and its PIN, or testing one an admin set up and choosing
+its PIN), and each user's YubiKey pages (add, test, edit, set the PIN,
+disable, remove); the export to radiator-yubikey and the import and counter
+sync from it. The admin pages come next.
 
 ## Documents
 
@@ -54,9 +55,11 @@ several threads at once.
 
 `tests/yubikeys/test_radiator_crosscheck.py` checks OTP verdicts and stored
 counters against radiator-yubikey's `tests/make-otp.sh` and `yubikey-db.sh
-verify` (addendum §8.2), without changing radiator-yubikey. It uses the
-checkout at `../radiator-yubikey` (or `$YK_PORTAL_RADIATOR_YUBIKEY`) and needs
-`sqlite3`, `openssl` and `libcrypt-rijndael-perl`; without them it is skipped.
+verify` (addendum §8.2), and `tests/radiator/test_radiator_crosscheck.py`
+loads yk-portal's export into `yubikey-db.sh` and imports its export, without
+changing radiator-yubikey. They use the checkout at `../radiator-yubikey` (or
+`$YK_PORTAL_RADIATOR_YUBIKEY`) and need `sqlite3`, `openssl` and
+`libcrypt-rijndael-perl`; without them they are skipped.
 
 `manage.py` uses the development settings (`yk_portal.settings.dev`), with
 files in the current directory: `dev.sqlite3` and `dev-master.key`.
@@ -100,11 +103,30 @@ audit event naming the operating-system user (and the `sudo` caller).
 | `bootstrap-admin [USERNAME]` | Creates the first admin account; refused once any admin exists. Prompts for the username if it isn't given |
 | `create-admin USERNAME [--email EMAIL]` | Creates another admin account |
 | `reset-admin USERNAME` | Gives an admin account a new temporary password and puts it in PROVISIONING: the way back in when no admin can sign in |
+| `radiator-export [--force] FILE\|-` | Writes every YubiKey in radiator-yubikey's export format (mode 0600), for `yubikey-db.sh import --from-export --replace`; prints which keys are exported inactive, and why |
+| `radiator-import [--dry-run] [--skip-invalid] [--counters-only] FILE\|-` | Reads a `yubikey-db.sh export` file: creates the accounts and adds the YubiKeys yk-portal doesn't have, and moves counters forward for those it has. `--skip-invalid` also leaves out Radiator's reserved accounts (`svc.`, `anycast-`); `--counters-only` only moves counters, for cron |
 
 New accounts start in PROVISIONING with the roles `user` (and `admin`), the
 default group if one is set, and a generated temporary password that is
 printed once and expires after the temporary password lifetime setting
-(72 hours by default).
+(72 hours by default). Accounts that `radiator-import` creates start ACTIVE,
+each YubiKey with its Radiator PIN (addendum §7).
+
+Loading yk-portal's accounts into Radiator (addendum §6.5):
+
+```bash
+sudo -u yk-portal yk-portal radiator-export /var/lib/yk-portal/export/radiator.csv
+sudo /opt/radiator-yubikey/yubikey-db.sh import --from-export --dry-run /var/lib/yk-portal/export/radiator.csv
+sudo /opt/radiator-yubikey/yubikey-db.sh import --from-export --replace /var/lib/yk-portal/export/radiator.csv
+sudo shred -u /var/lib/yk-portal/export/radiator.csv
+```
+
+Moving counters forward from Radiator's logins, for example from cron
+(addendum §7.5):
+
+```bash
+sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal radiator-import --counters-only -
+```
 
 ## Layout
 

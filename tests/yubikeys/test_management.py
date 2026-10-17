@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 
@@ -22,6 +24,7 @@ SELF = ProvisioningMethod.SELF_PROVISIONED
 ADMIN = ProvisioningMethod.ADMIN_PROVISIONED
 PIN = "Passw0rd!"
 PIN_HASHES = PinHashes(web="argon2$test", radius="{crypt}$6$test")
+MIGRATED = ProvisioningMethod.MIGRATED
 
 
 def new_key(
@@ -129,6 +132,47 @@ def test_self_provisioning_needs_an_otp_and_a_pin(user, actor, otp):
         management.add_yubikey(user, actor, new_key(), SELF, pin=PIN_HASHES)
     with pytest.raises(ValueError, match="a test OTP and a PIN"):
         management.add_yubikey(user, actor, new_key(), SELF, otp(1))
+
+
+def test_migrated_key_keeps_its_state_counters_and_times(user, actor):
+    created = datetime(2025, 1, 2, 3, 4, 5, tzinfo=UTC)
+    used = datetime(2026, 5, 6, 7, 8, 9, tzinfo=UTC)
+    migrated = management.Migrated("test", False, 12, 3, created, used)
+    credential = management.add_yubikey(
+        user, actor, new_key(slot=None), MIGRATED, migrated=migrated
+    )
+    stored = YubikeyCredential.objects.get(pk=credential.pk)
+    assert stored.provisioning_method == MIGRATED
+    assert stored.migration_source == "test"
+    assert not stored.enabled
+    assert (stored.last_usage_counter, stored.last_session_counter) == (12, 3)
+    assert (stored.created_at, stored.last_used_at) == (created, used)
+    assert stored.slot_number is None
+    assert AuditEvent.objects.get().details == {
+        "public_id": PUBLIC_ID,
+        "label": "",
+        "slot": None,
+        "method": MIGRATED,
+        "tested": False,
+        "enabled": False,
+        "source": "test",
+    }
+
+
+def test_migrated_key_without_times_gets_the_current_one(user, actor):
+    migrated = management.Migrated("test", True, 0, 0)
+    credential = management.add_yubikey(user, actor, new_key(), MIGRATED, migrated=migrated)
+    assert credential.created_at is not None
+    assert credential.last_used_at is None
+
+
+def test_only_migrated_keys_take_a_migrated_state(user, actor):
+    with pytest.raises(ValueError, match="migrated state"):
+        management.add_yubikey(user, actor, new_key(), MIGRATED)
+    with pytest.raises(ValueError, match="migrated state"):
+        management.add_yubikey(
+            user, actor, new_key(), ADMIN, migrated=management.Migrated("test", True, 0, 0)
+        )
 
 
 @pytest.mark.parametrize(

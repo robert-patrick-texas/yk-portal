@@ -86,6 +86,33 @@ def bootstrap_admin(username: str, actor: Actor) -> NewAccount:
     return _create(username, actor, "", True, None, EventType.ADMIN_BOOTSTRAPPED)
 
 
+def create_migrated_user(username: str, actor: Actor, source: str) -> User:
+    """Create an ACTIVE account for a user migrated from another system (addendum §7.2).
+
+    It gets the user role, the default group if one is set, no email address and
+    no temporary password. Its YubiKeys, added next, bring their PINs.
+
+    Args:
+        username: The username, used as it is: it isn't lowercased.
+        actor: Who creates the account.
+        source: Where it comes from, for the audit event.
+
+    Raises:
+        ValidationError: The username is invalid or taken.
+    """
+    validate_username(username)
+    with transaction.atomic():
+        return _insert(
+            username,
+            actor,
+            [Role.USER],
+            None,
+            EventType.ACCOUNT_CREATED,
+            {"source": source},
+            state=ACTIVE,
+        )
+
+
 def _create(
     username: str,
     actor: Actor,

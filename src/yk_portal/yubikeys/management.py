@@ -9,6 +9,7 @@ signed-in user may act on the credential; reveal_* check the admin role too.
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
@@ -46,6 +47,18 @@ class NewYubikey:
     slot: int | None = None
 
 
+@dataclass(frozen=True)
+class Migrated:
+    """What a YubiKey migrated from another system brings with it (spec §38; addendum §7.2)."""
+
+    source: str
+    enabled: bool
+    usage_counter: int
+    session_counter: int
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
 def parse_private_id(text: str) -> bytes:
     """A private ID typed as 12 hex characters; spaces and colons are ignored."""
     return _parse_hex(text, PRIVATE_ID_BYTES, "private ID")
@@ -63,8 +76,9 @@ def add_yubikey(
     method: ProvisioningMethod,
     test_otp: str | None = None,
     pin: PinHashes | None = None,
+    migrated: Migrated | None = None,
 ) -> YubikeyCredential:
-    """Add a YubiKey to USER (spec §13.2, §14).
+    """Add a YubiKey to USER (spec §13.2, §14, §38).
 
     Args:
         user: The owner.
@@ -72,9 +86,11 @@ def add_yubikey(
         key: The YubiKey's values.
         method: SELF_PROVISIONED needs TEST_OTP and PIN; ADMIN_PROVISIONED needs neither
             (no proof of possession, spec §14): its owner tests it and sets its PIN.
+            MIGRATED needs MIGRATED, and brings its PIN if it has one.
         test_otp: An OTP from the YubiKey, proving the values: it must decrypt with the AES
             key and carry the private ID. Its counters become the stored ones.
         pin: The hashes of the YubiKey's PIN, checked against the policy by the caller.
+        migrated: A MIGRATED key's state and counters in the system it comes from.
 
     Returns:
         The new credential.
@@ -90,6 +106,8 @@ def add_yubikey(
         raise ValidationError("Choose slot 1 or 2.", code="invalid_slot")
     if method == ProvisioningMethod.SELF_PROVISIONED and (test_otp is None or pin is None):
         raise ValueError("a self-provisioned YubiKey needs a test OTP and a PIN")
+    if (method == ProvisioningMethod.MIGRATED) != (migrated is not None):
+        raise ValueError("a migrated YubiKey needs its migrated state, and only it")
     token = _check_test_otp(public_id, key, test_otp) if test_otp is not None else None
     with transaction.atomic():
         # Locked, so two adds at once can't pass the maximum.
@@ -128,8 +146,19 @@ def add_yubikey(
             "method": method,
             "tested": token is not None,
         }
+        if migrated:
+            credential.enabled = migrated.enabled
+            credential.last_usage_counter = migrated.usage_counter
+            credential.last_session_counter = migrated.session_counter
+            credential.last_used_at = migrated.last_used_at
+            credential.migration_source = migrated.source
+            details |= {"enabled": migrated.enabled, "source": migrated.source}
         credential.set_secrets(key.private_id, key.aes_key)
         credential.save()
+        if migrated and migrated.created_at:
+            # created_at is set on insert, whatever the credential held.
+            credential.created_at = migrated.created_at
+            credential.save(update_fields=["created_at"])
         record(EventType.YUBIKEY_ADDED, actor, user, details=details)
     return credential
 
