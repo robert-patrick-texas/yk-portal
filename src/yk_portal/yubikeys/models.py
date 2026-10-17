@@ -1,7 +1,8 @@
 """YubiKey credentials (spec §21, §25.4; addendum §12).
 
 The private ID and AES key are each stored as one AES-256-GCM value
-(yk_portal.core.encryption), bound to their column and row.
+(yk_portal.core.encryption), bound to their column and row. Each YubiKey has
+its own PIN, typed before its OTP (addendum §2.2).
 """
 
 import uuid
@@ -41,6 +42,13 @@ class YubikeyCredential(models.Model):
     # replaces a row with the same private ID, even another user's (addendum §6.4).
     private_id_digest = models.CharField(max_length=64, unique=True)
     encrypted_aes_secret = models.BinaryField()
+    # The PIN's Argon2id hash, for web logins, and its {crypt}$6$ SHA-512 crypt hash, for
+    # the export to radiator-yubikey (addendum §2.2). Both empty until a PIN is set; a key
+    # imported from Radiator may have only the SHA-512 hash (addendum §2.8).
+    pin_hash = models.CharField(max_length=255, blank=True, default="")
+    radius_pin_hash = models.CharField(max_length=255, blank=True, default="")
+    # Consecutive failed logins with this YubiKey since its last success (addendum §2.14).
+    failed_login_count = models.PositiveSmallIntegerField(default=0)
     enabled = models.BooleanField(default=True)
     # The last accepted OTP's counters, as radiator-yubikey stores them (addendum §8).
     last_usage_counter = models.PositiveIntegerField(default=0)
@@ -85,6 +93,10 @@ class YubikeyCredential(models.Model):
 
     def __str__(self) -> str:
         return self.public_id
+
+    @property
+    def has_pin(self) -> bool:
+        return bool(self.pin_hash or self.radius_pin_hash)
 
     def set_secrets(self, private_id: bytes, aes_key: bytes) -> None:
         """Encrypt and set the private ID (6 bytes) and AES key (16 bytes). Doesn't save."""

@@ -1,4 +1,5 @@
-"""Adding and managing YubiKey credentials (spec §13, §14, §20, §34; addendum §3.2).
+"""Adding and managing YubiKey credentials and their PINs (spec §13, §14, §20, §34;
+addendum §2.2, §3.2).
 
 Each change records an audit event without any secret. A broken rule raises
 ValidationError, as in yk_portal.accounts.services. The pages check that the
@@ -6,6 +7,7 @@ signed-in user may act on the credential; reveal_* check the admin role too.
 """
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -15,6 +17,7 @@ from django.utils import timezone
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
+from yk_portal.authentication.passwords import PinHashes, hash_pin, validate_pin
 from yk_portal.portal_settings.service import current as current_settings
 
 from .models import (
@@ -59,6 +62,7 @@ def add_yubikey(
     key: NewYubikey,
     method: ProvisioningMethod,
     test_otp: str | None = None,
+    pin: PinHashes | None = None,
 ) -> YubikeyCredential:
     """Add a YubiKey to USER (spec §13.2, §14).
 
@@ -66,10 +70,11 @@ def add_yubikey(
         user: The owner.
         actor: Who adds it.
         key: The YubiKey's values.
-        method: SELF_PROVISIONED needs TEST_OTP; ADMIN_PROVISIONED doesn't (no proof of
-            possession, spec §14), and its owner tests it while onboarding.
+        method: SELF_PROVISIONED needs TEST_OTP and PIN; ADMIN_PROVISIONED needs neither
+            (no proof of possession, spec §14): its owner tests it and sets its PIN.
         test_otp: An OTP from the YubiKey, proving the values: it must decrypt with the AES
             key and carry the private ID. Its counters become the stored ones.
+        pin: The hashes of the YubiKey's PIN, checked against the policy by the caller.
 
     Returns:
         The new credential.
@@ -83,8 +88,8 @@ def add_yubikey(
     validate_label(key.label)
     if key.slot not in (None, 1, 2):
         raise ValidationError("Choose slot 1 or 2.", code="invalid_slot")
-    if method == ProvisioningMethod.SELF_PROVISIONED and test_otp is None:
-        raise ValueError("a self-provisioned YubiKey needs a test OTP")
+    if method == ProvisioningMethod.SELF_PROVISIONED and (test_otp is None or pin is None):
+        raise ValueError("a self-provisioned YubiKey needs a test OTP and a PIN")
     token = _check_test_otp(public_id, key, test_otp) if test_otp is not None else None
     with transaction.atomic():
         # Locked, so two adds at once can't pass the maximum.
@@ -113,18 +118,69 @@ def add_yubikey(
             last_usage_counter=token.usage_counter if token else 0,
             last_session_counter=token.session_counter if token else 0,
             last_used_at=timezone.now() if token else None,
+            pin_hash=pin.web if pin else "",
+            radius_pin_hash=pin.radius if pin else "",
         )
-        credential.set_secrets(key.private_id, key.aes_key)
-        credential.save()
-        details = {
+        details: dict[str, str | int | bool | None] = {
             "public_id": public_id,
             "label": key.label,
             "slot": key.slot,
             "method": method,
             "tested": token is not None,
         }
+        credential.set_secrets(key.private_id, key.aes_key)
+        credential.save()
         record(EventType.YUBIKEY_ADDED, actor, user, details=details)
     return credential
+
+
+def set_pin(user: User, credentials: Sequence[YubikeyCredential], pin: str, actor: Actor) -> None:
+    """Set the PIN of one or more of USER's YubiKeys (addendum §2.15). Each gets both
+    hashes, with salts of its own, so the hashes don't show which keys share a PIN.
+
+    Raises:
+        ValidationError: The PIN breaks the policy (spec §12, addendum §2.6).
+    """
+    validate_pin(pin)
+    hashes = [hash_pin(pin) for _ in credentials]
+    with transaction.atomic():
+        for credential, pin_hashes in zip(credentials, hashes, strict=True):
+            if not YubikeyCredential.objects.filter(pk=credential.pk, user=user).update(
+                pin_hash=pin_hashes.web,
+                radius_pin_hash=pin_hashes.radius,
+                updated_at=timezone.now(),
+            ):
+                raise ValueError(f"{credential} is not one of {user}'s YubiKeys")
+            credential.pin_hash, credential.radius_pin_hash = pin_hashes.web, pin_hashes.radius
+        details = {"public_ids": sorted(c.public_id for c in credentials)}
+        record(EventType.PASSWORD_CHANGED, actor, user, details=details)
+
+
+def change_pin(
+    credential: YubikeyCredential, actor: Actor, pin: str, otp_text: str, everywhere: bool = False
+) -> None:
+    """Set a YubiKey's PIN, proven by an OTP from it (addendum §2.15).
+
+    Args:
+        everywhere: Set it on all the user's YubiKeys, not only this one.
+
+    Raises:
+        ValidationError: The PIN breaks the policy, or the OTP comes from another
+            YubiKey.
+        OtpRejected: As for check_yubikey; nothing counts toward lockout.
+    """
+    validate_pin(pin)  # before the OTP is used up
+    otp = parse_otp(otp_text.strip())
+    if otp.public_id != credential.public_id:
+        raise ValidationError(
+            "That OTP comes from another YubiKey. Touch this one.", code="other_yubikey"
+        )
+    with transaction.atomic():
+        accept_otp(find_credential(credential.user, otp.public_id), otp)
+        user = credential.user
+        keys = list(YubikeyCredential.objects.filter(user=user)) if everywhere else [credential]
+        set_pin(user, keys, pin, actor)
+    credential.refresh_from_db()
 
 
 def check_yubikey(user: User, otp_text: str) -> YubikeyCredential:

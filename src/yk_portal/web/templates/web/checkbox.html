@@ -1,0 +1,4 @@
+<div class="field checkbox">
+  <label for="{{ field.id_for_label }}">{{ field }} {{ field.label }}</label>
+  {% for message in field.errors %}<p class="field-error">{{ message }}</p>{% endfor %}
+</div>

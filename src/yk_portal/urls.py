@@ -12,12 +12,12 @@ urlpatterns: list[URLPattern | URLResolver] = [
     path("logout/", authentication.logout, name="logout"),
     path("provision/", accounts.provision, name="provision"),
     path("provision/email/", accounts.provision_email, name="provision-email"),
-    path("provision/password/", accounts.provision_password, name="provision-password"),
     path("provision/yubikey/", accounts.provision_yubikey, name="provision-yubikey"),
     path("account/yubikeys/", yubikeys.yubikeys, name="yubikeys"),
     path("account/yubikeys/add/", yubikeys.add, name="yubikey-add"),
     path("account/yubikeys/test/", yubikeys.test, name="yubikey-test"),
     path("account/yubikeys/<uuid:credential_id>/edit/", yubikeys.edit, name="yubikey-edit"),
+    path("account/yubikeys/<uuid:credential_id>/pin/", yubikeys.pin, name="yubikey-pin"),
     path(
         "account/yubikeys/<uuid:credential_id>/enable/",
         yubikeys.set_enabled,

@@ -18,5 +18,5 @@ def show_temporary_password(stdout: OutputWrapper, user: User, temporary_passwor
     stdout.write(f"Temporary password: {temporary_password}")
     stdout.write(
         f"It expires {expires:%Y-%m-%d %H:%M} UTC. Give it to {user.username} privately: "
-        "they sign in with it, then set a permanent password and add a YubiKey."
+        "they sign in with it, then add a YubiKey and choose its PIN."
     )

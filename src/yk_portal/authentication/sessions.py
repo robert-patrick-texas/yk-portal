@@ -117,11 +117,13 @@ def purge_ended_sessions(portal_settings: PortalSettings) -> int:
     return deleted
 
 
-def revoke_sessions(user: User) -> int:
-    """Revoke every session of USER (spec §15, §18). Returns how many were live."""
-    return Session.objects.filter(user=user, revoked_at__isnull=True).update(
-        revoked_at=timezone.now()
-    )
+def revoke_sessions(user: User, keep: Session | None = None) -> int:
+    """Revoke every session of USER but KEEP (spec §15, §18, §19). Returns how many were
+    live."""
+    sessions = Session.objects.filter(user=user, revoked_at__isnull=True)
+    if keep is not None:
+        sessions = sessions.exclude(pk=keep.pk)
+    return sessions.update(revoked_at=timezone.now())
 
 
 def request_actor(request: PortalRequest) -> Actor:

@@ -6,9 +6,9 @@ from django.core.exceptions import ValidationError
 from yk_portal.authentication.passwords import (
     check_web_password,
     generate_temporary_password,
-    hash_password,
+    hash_pin,
     hash_web_password,
-    validate_password,
+    validate_pin,
 )
 from yk_portal.core import sha512_crypt
 
@@ -34,8 +34,8 @@ def test_empty_password_is_refused():
         hash_web_password("")
 
 
-def test_both_hashes_come_from_one_password():
-    hashes = hash_password("Passw0rd!")
+def test_both_hashes_come_from_one_pin():
+    hashes = hash_pin("Passw0rd!")
     assert check_web_password("Passw0rd!", hashes.web)
     assert sha512_crypt.check_hash("Passw0rd!", hashes.radius)
     assert hashes.web not in repr(hashes) and hashes.radius not in repr(hashes)
@@ -53,8 +53,8 @@ def test_both_hashes_come_from_one_password():
         "é" * 30 + "1" * 20,  # 80 bytes in UTF-8
     ],
 )
-def test_valid_passwords(password):
-    validate_password(password)
+def test_valid_pins(password):
+    validate_pin(password)
 
 
 @pytest.mark.parametrize(
@@ -72,17 +72,17 @@ def test_valid_passwords(password):
         ("", ["password_too_short", "password_no_letter", "password_no_number"]),
     ],
 )
-def test_invalid_passwords(password, codes):
+def test_invalid_pins(password, codes):
     with pytest.raises(ValidationError) as excinfo:
-        validate_password(password)
+        validate_pin(password)
     assert [e.code for e in excinfo.value.error_list] == codes
 
 
 def test_bytes_over_the_limit_are_explained():
     with pytest.raises(ValidationError, match="count as 2 to 4"):
-        validate_password("é" * 31 + "1" * 19)
+        validate_pin("é" * 31 + "1" * 19)
     with pytest.raises(ValidationError) as excinfo:
-        validate_password("x" * 81)
+        validate_pin("x" * 81)
     assert excinfo.value.messages[0] == "Use at most 80 characters."
 
 
@@ -91,4 +91,4 @@ def test_temporary_passwords_meet_the_policy():
     assert len(passwords) == 50
     for password in passwords:
         assert re.fullmatch(r"[a-hjkmnp-z2-9]{4}(-[a-hjkmnp-z2-9]{4}){3}", password)
-        validate_password(password)
+        validate_pin(password)

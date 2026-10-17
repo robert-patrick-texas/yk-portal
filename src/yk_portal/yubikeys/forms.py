@@ -1,6 +1,8 @@
 from django import forms
 from django.core.exceptions import ValidationError
 
+from yk_portal.authentication.passwords import validate_pin
+
 from .management import NewYubikey, parse_aes_key, parse_private_id
 from .validators import validate_label, validate_public_id
 
@@ -28,8 +30,41 @@ def _secret_field(label: str, help_text: str) -> forms.CharField:
     )
 
 
-class YubikeyForm(forms.Form):
-    """A YubiKey's values as ykman set them, its label and slot, and a test OTP."""
+def _pin_field(label: str, help_text: str = "") -> forms.CharField:
+    return forms.CharField(
+        label=label,
+        max_length=200,
+        strip=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password", "data-reveal": True}),
+        help_text=help_text,
+    )
+
+
+class PinForm(forms.Form):
+    """A YubiKey's new PIN, typed twice (addendum §2.2)."""
+
+    pin = _pin_field(
+        "PIN",
+        "8 to 80 characters, with at least one letter and one number, not ending with a "
+        "colon. You type it before this YubiKey's OTP, here and in Radiator.",
+    )
+    confirm = _pin_field("PIN again")
+
+    def clean(self) -> dict[str, object]:
+        data = super().clean() or {}
+        pin, confirm = data.get("pin"), data.get("confirm")
+        if isinstance(pin, str):
+            try:
+                validate_pin(pin)
+            except ValidationError as e:
+                self.add_error("pin", e)
+            if confirm is not None and pin != confirm:
+                self.add_error("confirm", "The two PINs differ.")
+        return data
+
+
+class YubikeyForm(PinForm):
+    """A YubiKey's values as ykman set them, its label, slot and PIN, and a test OTP."""
 
     public_id = forms.CharField(
         label="Public ID",
@@ -86,6 +121,19 @@ class YubikeyForm(forms.Form):
 
 class OtpForm(forms.Form):
     otp = _otp_field()
+
+
+class OtpPinForm(PinForm):
+    """Onboarding with a pre-provisioned YubiKey: an OTP from it, and its PIN."""
+
+    otp = _otp_field()
+
+
+class ChangePinForm(PinForm):
+    """A YubiKey's new PIN, proven by an OTP from it (addendum §2.15)."""
+
+    otp = _otp_field()
+    everywhere = forms.BooleanField(required=False, label="Use this PIN on all my YubiKeys")
 
 
 class YubikeyEditForm(forms.Form):

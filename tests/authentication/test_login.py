@@ -14,7 +14,7 @@ from yk_portal.authentication.login import (
     split_passcode,
 )
 from yk_portal.authentication.models import Session
-from yk_portal.authentication.passwords import check_web_password, hash_password
+from yk_portal.authentication.passwords import check_web_password, hash_pin
 from yk_portal.authentication.sessions import Client, start_session
 from yk_portal.core import sha512_crypt
 from yk_portal.portal_settings import service as portal_settings
@@ -22,9 +22,12 @@ from yk_portal.yubikeys.models import YubikeyCredential
 
 pytestmark = pytest.mark.django_db
 
-PASSWORD = "Passw0rd!"  # noqa: S105 - a test password
+PIN = "Passw0rd!"
+PIN2 = "0ther-pin2"
 PUBLIC_ID = "vvccccbbcdef"
+PUBLIC_ID2 = "vvccccbbcdeg"
 PRIVATE_ID = "4a6f8e2d1c3b"
+PRIVATE_ID2 = "4a6f8e2d1c3c"
 K1 = "6b1f0a9d2c7e4f3a8b5d0c1e9f2a7b6d"
 K2 = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 CLIENT = Client("192.0.2.10", "pytest")
@@ -38,14 +41,35 @@ P, A, L, D = (
 
 @pytest.fixture(scope="session")
 def hashes():
-    return hash_password(PASSWORD)
+    return {pin: hash_pin(pin) for pin in (PIN, PIN2)}
 
 
 @pytest.fixture
 def alice(make_user, make_credential, hashes):
-    user = make_user("alice", password_hash=hashes.web, radius_password_hash=hashes.radius)
-    make_credential(user, public_id=PUBLIC_ID, private_id=PRIVATE_ID, aes_key=K1)
+    """alice, whose YubiKey PUBLIC_ID has the PIN PIN."""
+    user = make_user("alice")
+    make_credential(
+        user,
+        public_id=PUBLIC_ID,
+        private_id=PRIVATE_ID,
+        aes_key=K1,
+        pin_hash=hashes[PIN].web,
+        radius_pin_hash=hashes[PIN].radius,
+    )
     return user
+
+
+@pytest.fixture
+def second_key(alice, make_credential, hashes):
+    """alice's second YubiKey, PUBLIC_ID2, with the PIN PIN2."""
+    return make_credential(
+        alice,
+        public_id=PUBLIC_ID2,
+        private_id=PRIVATE_ID2,
+        aes_key=K1,
+        pin_hash=hashes[PIN2].web,
+        radius_pin_hash=hashes[PIN2].radius,
+    )
 
 
 @pytest.fixture
@@ -78,6 +102,10 @@ def fresh(user: User) -> User:
     return User.objects.get(pk=user.pk)
 
 
+def key_failures(public_id: str = PUBLIC_ID) -> int:
+    return YubikeyCredential.objects.get(public_id=public_id).failed_login_count
+
+
 @pytest.mark.parametrize(
     ("passcode", "expected"),
     [
@@ -93,12 +121,13 @@ def test_split_passcode(passcode, expected):
     assert split_passcode(passcode) == expected
 
 
-# ACTIVE accounts: password + OTP
+# ACTIVE accounts: a YubiKey's PIN + its OTP
 
 
 def test_login(alice, otp):
     User.objects.filter(pk=alice.pk).update(failed_login_count=2)
-    session, token = log_in("Alice", PASSWORD + otp(3, 1), CLIENT)
+    YubikeyCredential.objects.filter(public_id=PUBLIC_ID).update(failed_login_count=2)
+    session, token = log_in("Alice", PIN + otp(3, 1), CLIENT)
     assert session.user == alice
     assert session.source_ip == "192.0.2.10"
     assert session.user_agent == "pytest"
@@ -108,8 +137,10 @@ def test_login(alice, otp):
     assert user.last_login_at is not None
     credential = YubikeyCredential.objects.get(public_id=PUBLIC_ID)
     assert (credential.last_usage_counter, credential.last_session_counter) == (3, 1)
+    assert credential.failed_login_count == 0
     event = last_event()
     assert event.event_type == EventType.LOGIN_SUCCESS
+    assert event.details == {"state": A, "public_id": PUBLIC_ID}
     assert event.actor_user_id == event.target_user_id == alice.pk
     assert event.session_id == session.pk
     assert event.source_ip == "192.0.2.10"
@@ -118,109 +149,160 @@ def test_login(alice, otp):
 def test_login_deletes_ended_sessions(alice, otp, make_user):
     old, _ = start_session(make_user(), CLIENT)
     Session.objects.filter(pk=old.pk).update(revoked_at=timezone.now())
-    session, _ = log_in("alice", PASSWORD + otp(3, 1), CLIENT)
+    session, _ = log_in("alice", PIN + otp(3, 1), CLIENT)
     assert list(Session.objects.all()) == [session]
 
 
 def test_login_with_a_colon_before_the_otp(alice, otp):
-    log_in("alice", f"{PASSWORD}:{otp(3, 1)}", CLIENT)
+    log_in("alice", f"{PIN}:{otp(3, 1)}", CLIENT)
 
 
 @pytest.mark.parametrize(
-    ("passcode", "reason"),
+    ("passcode", "reason", "public_id"),
     [
-        ("wrong-pw1" + "{otp}", "wrong password"),
-        ("{pw}", "malformed OTP"),
-        ("{pw}" + "x" * 44, "malformed OTP"),
-        ("{pw}{other_key}", "unknown public ID"),
-        ("{pw}{bad_crc}", "token does not decrypt (wrong AES key, or a mistyped OTP)"),
-        ("{pw}{bad_private_id}", "private ID mismatch"),
+        # Against the YubiKey: its PIN or OTP was wrong (addendum §2.14).
+        ("wrong-pin1{otp}", "wrong PIN", PUBLIC_ID),
+        ("{pin}{bad_crc}", "token does not decrypt (wrong AES key, or a mistyped OTP)", PUBLIC_ID),
+        ("{pin}{bad_private_id}", "private ID mismatch", PUBLIC_ID),
+        # Against the account: no YubiKey of it was named.
+        ("{pin}", "malformed OTP", None),
+        ("{pin}" + "x" * 44, "malformed OTP", None),
+        ("{pin}{other_key}", "unknown public ID", None),
     ],
 )
-def test_failures_count(alice, otp, passcode, reason):
+def test_failures_count(alice, otp, passcode, reason, public_id):
     passcode = passcode.format(
-        pw=PASSWORD,
+        pin=PIN,
         otp=otp(3, 1),
-        other_key=otp(3, 1, public_id="vvccccbbcdeg"),
+        other_key=otp(3, 1, public_id="vvccccbbcdeh"),
         bad_crc=otp(3, 1, aes_key=K2),
         bad_private_id=otp(3, 1, private_id="111111111111"),
     )
     refused("alice", passcode)
-    assert fresh(alice).failed_login_count == 1
+    assert (key_failures(), fresh(alice).failed_login_count) == ((1, 0) if public_id else (0, 1))
     event = last_event()
     assert event.event_type == EventType.LOGIN_FAILURE
     assert event.result == Result.FAILURE
     assert event.target_user_id == alice.pk
-    assert event.details == {"reason": reason, "failed_logins": 1}
+    expected = {"reason": reason, "failed_logins": 1}
+    assert event.details == (expected | {"public_id": public_id} if public_id else expected)
     assert not Session.objects.exists()
 
 
-def test_a_wrong_password_leaves_the_otp_unused(alice, otp):
-    refused("alice", "wrong-pw1" + otp(3, 1))
+def test_a_wrong_pin_leaves_the_otp_unused(alice, otp):
+    refused("alice", "wrong-pin1" + otp(3, 1))
     credential = YubikeyCredential.objects.get(public_id=PUBLIC_ID)
     assert (credential.last_usage_counter, credential.last_session_counter) == (0, 0)
-    log_in("alice", PASSWORD + otp(3, 1), CLIENT)
+    log_in("alice", PIN + otp(3, 1), CLIENT)
 
 
-def test_a_replayed_otp_counts(alice, otp):
-    log_in("alice", PASSWORD + otp(3, 1), CLIENT)
-    refused("alice", PASSWORD + otp(3, 1))
+def test_a_replayed_otp_counts_against_the_key(alice, otp):
+    log_in("alice", PIN + otp(3, 1), CLIENT)
+    refused("alice", PIN + otp(3, 1))
     assert last_event().details["reason"] == "replayed or stale OTP"
-    assert fresh(alice).failed_login_count == 1
+    assert key_failures() == 1
 
 
-def test_another_users_key_and_a_disabled_key_count(alice, otp, make_user, make_credential):
-    make_credential(make_user("bob"), public_id="vvccccbbcdeg", aes_key=K1)
-    refused("alice", PASSWORD + otp(3, 1, public_id="vvccccbbcdeg"))
+def test_another_users_key_and_a_disabled_key_count_against_the_account(
+    alice, otp, make_user, make_credential
+):
+    make_credential(make_user("bob"), public_id="vvccccbbcdeh", aes_key=K1)
+    refused("alice", PIN + otp(3, 1, public_id="vvccccbbcdeh"))
     assert last_event().details["reason"] == "public ID of another user's YubiKey"
     YubikeyCredential.objects.filter(public_id=PUBLIC_ID).update(enabled=False)
-    refused("alice", PASSWORD + otp(3, 1))
+    refused("alice", PIN + otp(3, 1))
     assert last_event().details["reason"] == "disabled YubiKey"
-    assert fresh(alice).failed_login_count == 2
+    assert (fresh(alice).failed_login_count, key_failures()) == (2, 0)
 
 
-def test_a_success_clears_the_count(alice, otp):
-    refused("alice", "wrong-pw1" + otp(3, 1))
-    refused("alice", "wrong-pw1" + otp(3, 2))
-    log_in("alice", PASSWORD + otp(3, 3), CLIENT)
-    assert fresh(alice).failed_login_count == 0
+def test_a_success_clears_the_keys_count_and_the_accounts(alice, otp):
+    refused("alice", "wrong-pin1" + otp(3, 1))
+    refused("alice", PIN + "x" * 44)
+    log_in("alice", PIN + otp(3, 3), CLIENT)
+    assert (key_failures(), fresh(alice).failed_login_count) == (0, 0)
 
 
 def test_the_third_failure_locks_the_account(alice, otp):
     session, _ = start_session(alice, CLIENT)
     for session_counter in (1, 2, 3):
-        refused("alice", "wrong-pw1" + otp(3, session_counter))
+        refused("alice", "wrong-pin1" + otp(3, session_counter))
     user = fresh(alice)
     assert user.state == L
-    assert user.failed_login_count == 3
+    assert key_failures() == 3
     locked = AuditEvent.objects.get(event_type=EventType.ACCOUNT_LOCKED)
     assert locked.details == {"old_state": A, "new_state": L}
     assert locked.source_ip == "192.0.2.10"
     # Its sessions end, and the right passcode no longer works (spec §18).
     assert Session.objects.get(pk=session.pk).revoked_at is not None
-    refused("alice", PASSWORD + otp(3, 4))
+    refused("alice", PIN + otp(3, 4))
     assert last_event().event_type == EventType.LOGIN_LOCKED
-    assert fresh(alice).failed_login_count == 3
+    assert key_failures() == 3
+
+
+def test_the_third_failure_naming_no_key_locks_the_account(alice):
+    for _ in range(3):
+        refused("alice", PIN + "x" * 44)
+    assert fresh(alice).state == L
 
 
 def test_the_limit_follows_the_setting(alice, otp, actor):
     portal_settings.update({"failed_login_limit": 5}, actor)
     for session_counter in range(1, 5):
-        refused("alice", "wrong-pw1" + otp(3, session_counter))
+        refused("alice", "wrong-pin1" + otp(3, session_counter))
     assert fresh(alice).state == A
-    refused("alice", "wrong-pw1" + otp(3, 5))
+    refused("alice", "wrong-pin1" + otp(3, 5))
     assert fresh(alice).state == L
+
+
+# Several YubiKeys, each with its own PIN (addendum §2.2, §2.14)
+
+
+def test_each_key_takes_its_own_pin(alice, second_key, otp):
+    refused("alice", PIN2 + otp(3, 1))
+    refused("alice", PIN + otp(3, 1, public_id=PUBLIC_ID2, private_id=PRIVATE_ID2))
+    log_in("alice", PIN + otp(3, 1), CLIENT)
+    log_in("alice", PIN2 + otp(3, 2, public_id=PUBLIC_ID2, private_id=PRIVATE_ID2), CLIENT)
+
+
+def test_failures_with_different_keys_dont_add_up(alice, second_key, otp):
+    for session_counter in (1, 2):
+        refused("alice", "wrong-pin1" + otp(3, session_counter))
+        refused(
+            "alice",
+            "wrong-pin1" + otp(3, session_counter, public_id=PUBLIC_ID2, private_id=PRIVATE_ID2),
+        )
+    assert fresh(alice).state == A
+    assert (key_failures(PUBLIC_ID), key_failures(PUBLIC_ID2)) == (2, 2)
+
+
+def test_a_success_with_one_key_leaves_anothers_count(alice, second_key, otp):
+    """A stolen YubiKey gets no more PIN guesses while its owner signs in with another."""
+    second = {"public_id": PUBLIC_ID2, "private_id": PRIVATE_ID2}
+    refused("alice", "wrong-pin1" + otp(3, 1, **second))
+    refused("alice", "wrong-pin1" + otp(3, 2, **second))
+    log_in("alice", PIN + otp(3, 1), CLIENT)
+    assert key_failures(PUBLIC_ID2) == 2
+    refused("alice", "wrong-pin1" + otp(3, 3, **second))
+    assert fresh(alice).state == L
+
+
+def test_unlocking_clears_every_count(alice, second_key, otp, actor):
+    refused("alice", "wrong-pin1" + otp(3, 1, public_id=PUBLIC_ID2, private_id=PRIVATE_ID2))
+    for _ in range(3):
+        refused("alice", PIN + "x" * 44)
+    services.unlock(alice, actor)
+    assert (fresh(alice).failed_login_count, key_failures(PUBLIC_ID2)) == (0, 0)
 
 
 def test_a_disabled_account_is_refused_without_counting(alice, otp):
     User.objects.filter(pk=alice.pk).update(state=D)
-    refused("alice", PASSWORD + otp(3, 1))
+    refused("alice", PIN + otp(3, 1))
     assert fresh(alice).failed_login_count == 0
     assert last_event().details == {"reason": "account disabled"}
 
 
 def test_unknown_username(otp):
-    refused("nobody", PASSWORD + otp(3, 1))
+    refused("nobody", PIN + otp(3, 1))
     event = last_event()
     assert event.target_user_id is None
     assert event.details == {"reason": "unknown username nobody"}
@@ -228,39 +310,45 @@ def test_unknown_username(otp):
 
 
 def test_an_unknown_username_that_could_be_a_password_isnt_logged():
-    refused("Secret Pass 1!", PASSWORD)
+    refused("Secret Pass 1!", PIN)
     assert last_event().details == {"reason": "unknown username (not a valid username)"}
 
 
-# Accounts imported from Radiator (addendum §2.8)
+# YubiKeys imported from Radiator (addendum §2.8)
 
 
-def test_first_web_login_of_an_imported_account(make_user, make_credential, otp):
-    user = make_user(
-        "erin", password_hash="", radius_password_hash=sha512_crypt.make_hash("pin12345")
+@pytest.fixture
+def imported_key(make_user, make_credential):
+    """erin's YubiKey, with only the SHA-512 crypt hash of its PIN, pin12345."""
+    radius = sha512_crypt.make_hash("pin12345")
+    return make_credential(
+        make_user("erin"),
+        public_id=PUBLIC_ID,
+        private_id=PRIVATE_ID,
+        aes_key=K1,
+        pin_hash="",
+        radius_pin_hash=radius,
     )
-    make_credential(user, public_id=PUBLIC_ID, private_id=PRIVATE_ID, aes_key=K1)
+
+
+def test_first_web_login_with_an_imported_key(imported_key, otp):
     log_in("erin", "pin12345" + otp(3, 1), CLIENT)
-    assert check_web_password("pin12345", fresh(user).password_hash)
+    imported_key.refresh_from_db()
+    assert check_web_password("pin12345", imported_key.pin_hash)
     log_in("erin", "pin12345" + otp(3, 2), CLIENT)
 
 
-def test_an_imported_accounts_wrong_password_counts(make_user, make_credential, otp):
-    user = make_user(
-        "erin", password_hash="", radius_password_hash=sha512_crypt.make_hash("pin12345")
-    )
-    make_credential(user, public_id=PUBLIC_ID, private_id=PRIVATE_ID, aes_key=K1)
+def test_an_imported_keys_wrong_pin_counts(imported_key, otp):
     refused("erin", "pin99999" + otp(3, 1))
-    assert fresh(user).failed_login_count == 1
-    assert fresh(user).password_hash == ""
+    imported_key.refresh_from_db()
+    assert (imported_key.failed_login_count, imported_key.pin_hash) == (1, "")
 
 
-def test_an_account_without_any_password_never_signs_in(make_user, make_credential, otp):
-    user = make_user("frank", password_hash="", radius_password_hash="")
-    make_credential(user, public_id=PUBLIC_ID, private_id=PRIVATE_ID, aes_key=K1)
-    for password in ("", "anything1"):
-        refused("frank", password + otp(3, 1))
-    assert last_event().details["reason"] == "wrong password"
+def test_a_key_without_a_pin_never_signs_in(alice, otp):
+    YubikeyCredential.objects.filter(public_id=PUBLIC_ID).update(pin_hash="", radius_pin_hash="")
+    for pin in ("", "anything1"):
+        refused("alice", pin + otp(3, 1))
+    assert last_event().details["reason"] == "wrong PIN"
 
 
 # PROVISIONING accounts: the temporary password alone
@@ -312,7 +400,7 @@ def test_the_temporary_password_doesnt_take_an_otp(newcomer, otp):
 
 
 def test_confirm_identity(alice, otp):
-    confirm_identity(alice, PASSWORD + otp(3, 1), CLIENT)
+    confirm_identity(alice, PIN + otp(3, 1), CLIENT)
     credential = YubikeyCredential.objects.get(public_id=PUBLIC_ID)
     assert (credential.last_usage_counter, credential.last_session_counter) == (3, 1)
 
@@ -320,7 +408,7 @@ def test_confirm_identity(alice, otp):
 def test_failed_step_ups_count_and_lock(alice, otp):
     for session_counter in (1, 2, 3):
         with pytest.raises(LoginFailed):
-            confirm_identity(alice, "wrong-pw1" + otp(3, session_counter), CLIENT)
+            confirm_identity(alice, "wrong-pin1" + otp(3, session_counter), CLIENT)
     failures = AuditEvent.objects.filter(event_type=EventType.LOGIN_FAILURE)
-    assert {e.details["reason"] for e in failures} == {"step-up: wrong password"}
+    assert {e.details["reason"] for e in failures} == {"step-up: wrong PIN"}
     assert fresh(alice).state == L

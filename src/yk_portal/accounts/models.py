@@ -45,16 +45,14 @@ class User(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=255, unique=True, validators=[validate_username])
     email = models.EmailField(blank=True, default="")
-    # Argon2id, for web logins. Empty for an account imported from Radiator
-    # until its first web login (addendum §2.8).
-    password_hash = models.CharField(max_length=255, blank=True, default="")
-    # {crypt}$6$... SHA-512 crypt, for the export to radiator-yubikey (addendum §2.2).
-    radius_password_hash = models.CharField(max_length=255, blank=True, default="")
+    # The PINs are on the account's YubiKeys (addendum §2.2); the account has only its
+    # temporary password, while it is PROVISIONING.
     temporary_password_hash = models.CharField(max_length=255, blank=True, default="")
     temporary_password_expires_at = models.DateTimeField(null=True, blank=True)
     state = models.CharField(
         max_length=16, choices=AccountState.choices, default=AccountState.PROVISIONING
     )
+    # Consecutive failed logins not tied to one of its YubiKeys (addendum §2.14).
     failed_login_count = models.PositiveSmallIntegerField(default=0)
     # Empty until the user chooses: the default theme setting applies (addendum §4.2).
     theme = models.CharField(max_length=8, choices=Theme.choices, blank=True, default="")

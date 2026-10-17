@@ -9,9 +9,9 @@ from yk_portal.accounts.groups import create_group
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import AuditEvent, EventType
 from yk_portal.audit.service import Actor
-from yk_portal.authentication.passwords import check_web_password, hash_web_password
-from yk_portal.core import sha512_crypt
+from yk_portal.authentication.passwords import check_web_password
 from yk_portal.portal_settings import service as portal_settings
+from yk_portal.yubikeys.models import YubikeyCredential
 
 pytestmark = pytest.mark.django_db
 
@@ -60,7 +60,6 @@ def test_create_user(actor):
     assert user.state == P
     assert user.failed_login_count == 0
     assert roles(user) == {"user"}
-    assert user.password_hash == user.radius_password_hash == ""
     assert check_web_password(account.temporary_password, user.temporary_password_hash)
     assert user.temporary_password_expires_at is not None
     expected = before + timedelta(hours=72)
@@ -168,8 +167,10 @@ ALLOWED = {
 
 @pytest.mark.parametrize("change", ALLOWED, ids=lambda f: f.__name__)
 @pytest.mark.parametrize("state", [P, A, L, D])
-def test_state_transitions(actor, make_user, change, state):
+def test_state_transitions(actor, make_user, make_credential, change, state):
     user = make_user(state=state)
+    if change is services.enable:
+        make_credential(user)  # with a PIN, which enable needs
     if state in ALLOWED[change]:
         change(user, actor)
         assert AuditEvent.objects.filter(target_user_id=user.pk).count() == 1
@@ -190,8 +191,12 @@ def test_state_transitions(actor, make_user, change, state):
     ],
     ids=lambda v: getattr(v, "__name__", None),
 )
-def test_state_change_refreshes_the_user_and_audits(actor, make_user, change, start, end, event):
+def test_state_change_refreshes_the_user_and_audits(
+    actor, make_user, make_credential, change, start, end, event
+):
     user = make_user(state=start)
+    if change is services.enable:
+        make_credential(user)
     change(user, actor)
     assert user.state == end
     audit = AuditEvent.objects.get()
@@ -199,27 +204,41 @@ def test_state_change_refreshes_the_user_and_audits(actor, make_user, change, st
     assert audit.details == {"old_state": start, "new_state": end}
 
 
-def test_unlock_clears_the_failed_login_count(actor, make_user):
-    user = make_user(state=L, failed_login_count=3)
-    services.unlock(user, actor)
+def key_failures(user: User) -> list[int]:
+    return list(
+        YubikeyCredential.objects.filter(user=user).values_list("failed_login_count", flat=True)
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "state"),
+    [(services.unlock, L), (services.enable, D), (services.reset_to_provisioning, L)],
+    ids=lambda v: getattr(v, "__name__", None),
+)
+def test_changes_that_clear_every_failed_login_count(
+    actor, make_user, make_credential, change, state
+):
+    user = make_user(state=state, failed_login_count=3)
+    make_credential(user, failed_login_count=2)
+    make_credential(user, failed_login_count=3)
+    change(user, actor)
     assert user.failed_login_count == 0
+    assert key_failures(user) == [0, 0]
 
 
-def test_enable_clears_the_failed_login_count(actor, make_user):
-    user = make_user(state=D, failed_login_count=3)
-    services.enable(user, actor)
-    assert user.failed_login_count == 0
-
-
-def test_enable_needs_a_permanent_password(actor, make_user):
-    user = make_user(state=D, password_hash="", radius_password_hash="")
-    with raises("no_password"):
+def test_enable_needs_a_key_with_a_pin(actor, make_user, make_credential):
+    user = make_user(state=D)
+    make_credential(user, pin_hash="", radius_pin_hash="")
+    with raises("no_pin"):
         services.enable(user, actor)
     assert user.state == D
 
 
-def test_enable_an_imported_account_with_only_the_radius_hash(actor, make_user):
-    user = make_user(state=D, password_hash="")
+def test_enable_with_an_imported_key_that_has_only_the_radius_hash(
+    actor, make_user, make_credential
+):
+    user = make_user(state=D)
+    make_credential(user, pin_hash="")
     services.enable(user, actor)
     assert user.state == A
 
@@ -253,32 +272,6 @@ def test_set_temporary_password(actor):
 def test_temporary_passwords_differ(actor):
     passwords = {services.create_user(f"user{n}", actor).temporary_password for n in range(5)}
     assert len(passwords) == 5
-
-
-# Permanent password (addendum §2.3)
-
-
-def test_set_password_makes_both_hashes(actor, make_user):
-    temporary_hash = hash_web_password("temp0rary")
-    user = make_user(
-        state=P, password_hash="", radius_password_hash="", temporary_password_hash=temporary_hash
-    )
-    services.set_password(user, "Passw0rd!", actor)
-    assert check_web_password("Passw0rd!", user.password_hash)
-    assert sha512_crypt.check_hash("Passw0rd!", user.radius_password_hash)
-    # Cleared when provisioning completes (spec §11), not here.
-    assert user.temporary_password_hash == temporary_hash
-    audit = AuditEvent.objects.get()
-    assert audit.event_type == EventType.PASSWORD_CHANGED
-    assert audit.details == {}
-
-
-def test_set_password_applies_the_policy(actor, make_user):
-    user = make_user(password_hash="", radius_password_hash="")
-    with pytest.raises(ValidationError):
-        services.set_password(user, "short1", actor)
-    assert User.objects.get(pk=user.pk).password_hash == ""
-    assert not AuditEvent.objects.exists()
 
 
 # Roles and last-admin protection (spec §6, §9.1)

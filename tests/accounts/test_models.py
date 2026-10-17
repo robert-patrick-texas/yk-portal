@@ -17,7 +17,7 @@ def test_new_user_defaults():
     assert user.state == AccountState.PROVISIONING
     assert user.failed_login_count == 0
     assert user.theme == ""
-    assert user.password_hash == user.radius_password_hash == user.temporary_password_hash == ""
+    assert user.temporary_password_hash == ""
     assert user.temporary_password_expires_at is None
     assert user.last_login_at is None
     assert user.created_at is not None

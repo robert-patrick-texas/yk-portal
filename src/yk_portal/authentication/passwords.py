@@ -1,10 +1,12 @@
-"""The two password hashes of an account (addendum §2.2).
+"""PINs and temporary passwords (addendum §2.2).
 
-- The web password hash: Argon2id, through Django's Argon2 hasher (spec §12.1).
-- The RADIUS password hash: SHA-512 crypt, for the export to radiator-yubikey.
+Each YubiKey has a PIN, typed before its OTP, with two hashes:
 
-Today both come from the same password (addendum §2.3). Temporary passwords
-get only the Argon2id hash (addendum §2.5).
+- Argon2id, through Django's Argon2 hasher (spec §12.1), for web logins;
+- SHA-512 crypt, for the export to radiator-yubikey.
+
+Both come from the same PIN (addendum §2.3). Temporary passwords get only the
+Argon2id hash (addendum §2.5).
 """
 
 import secrets
@@ -27,13 +29,14 @@ _TEMPORARY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 
 @dataclass(frozen=True)
-class PasswordHashes:
+class PinHashes:
     web: str = field(repr=False)
     radius: str = field(repr=False)
 
 
 def hash_web_password(password: str) -> str:
-    """An Argon2id hash of PASSWORD, for yk-portal web logins and temporary passwords."""
+    """An Argon2id hash of PASSWORD, for yk-portal web logins: a PIN or a temporary
+    password."""
     if not password:
         raise ValueError("a password can't be empty")
     return make_password(password)
@@ -44,36 +47,36 @@ def check_web_password(password: str, stored: str) -> bool:
     return bool(stored) and check_password(password, stored)
 
 
-def hash_password(password: str) -> PasswordHashes:
-    """Both hashes of a permanent password, made together while the plain text is at hand."""
-    return PasswordHashes(web=hash_web_password(password), radius=sha512_crypt.make_hash(password))
+def hash_pin(pin: str) -> PinHashes:
+    """Both hashes of a PIN, made together while the plain text is at hand."""
+    return PinHashes(web=hash_web_password(pin), radius=sha512_crypt.make_hash(pin))
 
 
-def validate_password(password: str) -> None:
-    """Check a permanent password against the policy (spec §12, addendum §2.6).
+def validate_pin(pin: str) -> None:
+    """Check a PIN against the password policy (spec §12, addendum §2.6).
 
     8 to 80 characters (80 bytes in UTF-8) with at least one letter and one
     number, not ending with ":" (Radiator reads PIN:OTP), and no control
     characters, which crypt(3) and login prompts can't take.
 
     Raises:
-        ValidationError: With every rule the password breaks.
+        ValidationError: With every rule the PIN breaks.
     """
     errors = []
-    if len(password) < MIN_LENGTH:
+    if len(pin) < MIN_LENGTH:
         errors.append(ValidationError("Use at least 8 characters.", code="password_too_short"))
-    elif len(password.encode()) > MAX_BYTES:
+    elif len(pin.encode()) > MAX_BYTES:
         message = "Use at most 80 characters"
-        if len(password) <= MAX_BYTES:
+        if len(pin) <= MAX_BYTES:
             message += " (accented letters and other non-ASCII characters count as 2 to 4)"
         errors.append(ValidationError(message + ".", code="password_too_long"))
-    if not any(c.isalpha() for c in password):
+    if not any(c.isalpha() for c in pin):
         errors.append(ValidationError("Include at least one letter.", code="password_no_letter"))
-    if not any(c.isdecimal() for c in password):
+    if not any(c.isdecimal() for c in pin):
         errors.append(ValidationError("Include at least one number.", code="password_no_number"))
-    if password.endswith(":"):
-        errors.append(ValidationError("Don't end the password with :", code="password_colon"))
-    if any(unicodedata.category(c) == "Cc" for c in password):
+    if pin.endswith(":"):
+        errors.append(ValidationError("Don't end it with :", code="password_colon"))
+    if any(unicodedata.category(c) == "Cc" for c in pin):
         errors.append(
             ValidationError(
                 "Don't use control characters such as tab or line break.",

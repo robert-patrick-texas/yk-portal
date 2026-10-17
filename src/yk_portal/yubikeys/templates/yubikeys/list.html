@@ -6,7 +6,7 @@
 <div class="table-wrap">
 <table class="list">
   <thead>
-    <tr><th scope="col">Label</th><th scope="col">Public ID</th><th scope="col">Slot</th><th scope="col">State</th><th scope="col">Added</th><th scope="col">Last used</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr>
+    <tr><th scope="col">Label</th><th scope="col">Public ID</th><th scope="col">Slot</th><th scope="col">PIN</th><th scope="col">State</th><th scope="col">Added</th><th scope="col">Last used</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr>
   </thead>
   <tbody>
     {% for credential in credentials %}
@@ -14,11 +14,13 @@
       <td>{{ credential.label|default:"—" }}</td>
       <td><code>{{ credential.public_id }}</code></td>
       <td>{{ credential.slot_number|default:"—" }}</td>
+      <td>{% if credential.has_pin %}Set{% else %}Not set{% endif %}</td>
       <td>{% if credential.enabled %}Enabled{% else %}Disabled{% endif %}</td>
       <td>{{ credential.created_at|date:"Y-m-d" }}<br><span class="muted">{{ credential.get_provisioning_method_display }}</span></td>
       <td>{{ credential.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
       <td class="actions">
         <a href="{% url 'yubikey-edit' credential.pk %}">Edit</a>
+        <a href="{% url 'yubikey-pin' credential.pk %}">{% if credential.has_pin %}Change PIN{% else %}Set PIN{% endif %}</a>
         <form method="post" action="{% if credential.enabled %}{% url 'yubikey-disable' credential.pk %}{% else %}{% url 'yubikey-enable' credential.pk %}{% endif %}">
           {% csrf_token %}
           <button type="submit" class="link">{% if credential.enabled %}Disable{% else %}Enable{% endif %}</button>
@@ -27,7 +29,7 @@
       </td>
     </tr>
     {% empty %}
-    <tr><td colspan="7">No YubiKeys.</td></tr>
+    <tr><td colspan="8">No YubiKeys.</td></tr>
     {% endfor %}
   </tbody>
 </table>

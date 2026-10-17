@@ -1,10 +1,15 @@
-"""Signing in: username + passcode (spec §16, §18; addendum §2.8-§2.10).
+"""Signing in: username + passcode (spec §16, §18; addendum §2.8-§2.10, §2.14).
 
-An ACTIVE account signs in with its password followed by a YubiKey OTP. A
-PROVISIONING account signs in with its temporary password alone (spec §13).
-Every refusal raises the same LoginFailed, whatever the cause (spec §16); the
-cause goes to the audit log. Each attempt checks one password hash, even for
-an unknown username, so timing doesn't tell which usernames exist.
+An ACTIVE account signs in with the PIN of one of its YubiKeys followed by an
+OTP from that YubiKey. A PROVISIONING account signs in with its temporary
+password alone (spec §13). Every refusal raises the same LoginFailed, whatever
+the cause (spec §16); the cause goes to the audit log. Each attempt checks one
+hash, even for an unknown username, so timing doesn't tell which usernames
+exist.
+
+A failed login counts against the YubiKey whose PIN or OTP was wrong, or
+against the account when no YubiKey of it was named. Any one count reaching
+the failed-login limit locks the account (addendum §2.14).
 """
 
 import functools
@@ -23,13 +28,14 @@ from yk_portal.audit.service import Actor, record
 from yk_portal.authentication.passwords import check_web_password, hash_web_password
 from yk_portal.core import sha512_crypt
 from yk_portal.portal_settings.service import current as current_settings
+from yk_portal.yubikeys.models import YubikeyCredential
 from yk_portal.yubikeys.otp import OTP_LENGTH, OtpRejected, Rejection, parse_otp
 from yk_portal.yubikeys.service import accept_otp, find_credential
 
 from .models import Session
 from .sessions import Client, purge_ended_sessions, start_session
 
-MESSAGE = "Sign-in failed. Check your username, password and YubiKey."
+MESSAGE = "Sign-in failed. Check your username, PIN and YubiKey."
 
 
 class LoginFailed(Exception):
@@ -40,15 +46,15 @@ class LoginFailed(Exception):
 
 
 def split_passcode(passcode: str) -> tuple[str, str | None]:
-    """The password and the OTP: the last 44 characters (spec §5.3).
+    """The PIN and the OTP: the last 44 characters (spec §5.3).
 
     One ":" right before the OTP is dropped, as Radiator does (addendum §2.9);
-    a password can't end with ":". A passcode too short to hold an OTP has none.
+    a PIN can't end with ":". A passcode too short to hold an OTP has none.
     """
     if len(passcode) < OTP_LENGTH:
         return passcode, None
-    password, otp = passcode[:-OTP_LENGTH], passcode[-OTP_LENGTH:]
-    return password.removesuffix(":"), otp
+    pin, otp = passcode[:-OTP_LENGTH], passcode[-OTP_LENGTH:]
+    return pin.removesuffix(":"), otp
 
 
 def log_in(username: str, passcode: str, client: Client) -> tuple[Session, str]:
@@ -76,8 +82,8 @@ def log_in(username: str, passcode: str, client: Client) -> tuple[Session, str]:
     if user.state == AccountState.PROVISIONING:
         _check_temporary_password(user, passcode, anonymous)
         return _succeed(user, client, AccountState.PROVISIONING)
-    new_password_hash = _check_password_and_otp(user, passcode, anonymous)
-    return _succeed(user, client, AccountState.ACTIVE, new_password_hash)
+    credential, new_pin_hash = _check_pin_and_otp(user, passcode, anonymous)
+    return _succeed(user, client, AccountState.ACTIVE, credential, new_pin_hash)
 
 
 def _check_temporary_password(user: User, passcode: str, actor: Actor) -> None:
@@ -90,43 +96,55 @@ def _check_temporary_password(user: User, passcode: str, actor: Actor) -> None:
 
 
 def confirm_identity(user: User, passcode: str, client: Client) -> None:
-    """Step-up: the signed-in user's password and a fresh OTP again, before revealing a
+    """Step-up: the signed-in user's PIN and a fresh OTP again, before revealing a
     YubiKey secret (spec §20.2, addendum §3.2). A failure counts like a failed login.
 
     Raises:
         LoginFailed: The passcode isn't good.
     """
     actor = Actor(user=user, name=user.username, source_ip=client.source_ip)
-    _check_password_and_otp(user, passcode, actor, "step-up: ")
+    _check_pin_and_otp(user, passcode, actor, "step-up: ")
 
 
-def _check_password_and_otp(user: User, passcode: str, actor: Actor, context: str = "") -> str:
-    """Returns the Argon2id hash to store for an imported account's first web login
-    (addendum §2.8), else "". CONTEXT prefixes the audited reason of a failure."""
-    password, otp_text = split_passcode(passcode)
-    password_ok = _check_password(user, password)
+def _check_pin_and_otp(
+    user: User, passcode: str, actor: Actor, context: str = ""
+) -> tuple[YubikeyCredential, str]:
+    """Check the PIN of the YubiKey whose OTP ends PASSCODE, then the OTP (spec §16).
+
+    Args:
+        context: Prefixes the audited reason of a failure.
+
+    Returns:
+        The YubiKey, and the Argon2id hash to store for the first web login with a key
+        that has only the SHA-512 hash of its PIN (addendum §2.8), else "".
+    """
+    pin, otp_text = split_passcode(passcode)
     try:
         if otp_text is None:
             raise OtpRejected(Rejection.MALFORMED)
         otp = parse_otp(otp_text)
         credential = find_credential(user, otp.public_id)
-        if not password_ok:
-            # Checked before the OTP, so a wrong password doesn't use the OTP up.
-            _count_failure(user, actor, context + "wrong password")
+    except OtpRejected as e:
+        _check_nothing(pin)
+        _count_failure(user, actor, context + e.reason.value)
+    if not _check_pin(credential, pin):
+        # Checked before the OTP, so a wrong PIN doesn't use the OTP up.
+        _count_failure(user, actor, context + "wrong PIN", credential)
+    try:
         accept_otp(credential, otp)
     except OtpRejected as e:
-        _count_failure(user, actor, context + e.reason.value)
-    return "" if user.password_hash else hash_web_password(password)
+        _count_failure(user, actor, context + e.reason.value, credential)
+    return credential, "" if credential.pin_hash else hash_web_password(pin)
 
 
-def _check_password(user: User, password: str) -> bool:
-    """The Argon2id hash, or for an account imported from Radiator without one, the
-    SHA-512 crypt hash (addendum §2.8). An account with neither never matches."""
-    if user.password_hash:
-        return check_web_password(password, user.password_hash)
-    if user.radius_password_hash:
-        return sha512_crypt.check_hash(password, user.radius_password_hash)
-    _check_nothing(password)
+def _check_pin(credential: YubikeyCredential, pin: str) -> bool:
+    """The Argon2id hash, or for a key imported from Radiator without one, the SHA-512
+    crypt hash (addendum §2.8). A key with neither never matches."""
+    if credential.pin_hash:
+        return check_web_password(pin, credential.pin_hash)
+    if credential.radius_pin_hash:
+        return sha512_crypt.check_hash(pin, credential.radius_pin_hash)
+    _check_nothing(pin)
     return False
 
 
@@ -150,18 +168,33 @@ def _unknown(username: str) -> str:
     return f"unknown username {username}"
 
 
-def _count_failure(user: User, actor: Actor, reason: str) -> NoReturn:
-    """Record a failed login that counts, locking the account at the limit (spec §18)."""
+def _count_failure(
+    user: User, actor: Actor, reason: str, credential: YubikeyCredential | None = None
+) -> NoReturn:
+    """Record a failed login that counts (spec §18): against CREDENTIAL, the YubiKey whose
+    PIN or OTP was wrong, or else against the account. The account locks when the count
+    reaches the limit (addendum §2.14)."""
     with transaction.atomic():
         account = User.objects.select_for_update().get(pk=user.pk)
-        if account.state in (AccountState.ACTIVE, AccountState.PROVISIONING):
-            account.failed_login_count += 1
-            account.save(update_fields=["failed_login_count", "updated_at"])
-        details = {"reason": reason, "failed_logins": account.failed_login_count}
+        counts = account.state in (AccountState.ACTIVE, AccountState.PROVISIONING)
+        key = None
+        if credential is not None:
+            key = YubikeyCredential.objects.select_for_update().filter(pk=credential.pk).first()
+        details: dict[str, str | int] = {"reason": reason}
+        if key is not None:
+            if counts:
+                key.failed_login_count += 1
+                key.save(update_fields=["failed_login_count"])
+            failures = key.failed_login_count
+            details["public_id"] = key.public_id
+        else:
+            if counts:
+                account.failed_login_count += 1
+                account.save(update_fields=["failed_login_count", "updated_at"])
+            failures = account.failed_login_count
+        details["failed_logins"] = failures
         record(EventType.LOGIN_FAILURE, actor, account, details=details, result=Result.FAILURE)
-        if account.failed_login_count >= current_settings().failed_login_limit and (
-            account.state in (AccountState.ACTIVE, AccountState.PROVISIONING)
-        ):
+        if counts and failures >= current_settings().failed_login_limit:
             services.lock(account, actor)
     raise LoginFailed
 
@@ -175,23 +208,32 @@ def _refuse(
 
 
 def _succeed(
-    user: User, client: Client, state: AccountState, new_password_hash: str = ""
+    user: User,
+    client: Client,
+    state: AccountState,
+    credential: YubikeyCredential | None = None,
+    new_pin_hash: str = "",
 ) -> tuple[Session, str]:
+    """Start a session. Clears the failed-login count of the account and of CREDENTIAL,
+    the YubiKey used; the other YubiKeys' counts stay (addendum §2.14)."""
     with transaction.atomic():
         account = User.objects.select_for_update().get(pk=user.pk)
         if account.state != state:  # changed by an admin during the check
             _refuse(Actor(user=None, name="", source_ip=client.source_ip), account, "state changed")
         account.failed_login_count = 0
         account.last_login_at = timezone.now()
-        if new_password_hash and not account.password_hash:
-            account.password_hash = new_password_hash
-        account.save(
-            update_fields=["failed_login_count", "last_login_at", "password_hash", "updated_at"]
-        )
+        account.save(update_fields=["failed_login_count", "last_login_at", "updated_at"])
+        details: dict[str, str] = {"state": state}
+        if credential is not None:
+            keys = YubikeyCredential.objects.filter(pk=credential.pk)
+            keys.update(failed_login_count=0)
+            if new_pin_hash:
+                keys.filter(pin_hash="").update(pin_hash=new_pin_hash)
+            details["public_id"] = credential.public_id
         session, token = start_session(account, client)
         actor = Actor(
             user=account, name=account.username, source_ip=client.source_ip, session_id=session.pk
         )
-        record(EventType.LOGIN_SUCCESS, actor, account, details={"state": state})
+        record(EventType.LOGIN_SUCCESS, actor, account, details=details)
     purge_ended_sessions(current_settings())
     return session, token

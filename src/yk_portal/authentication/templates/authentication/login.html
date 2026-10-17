@@ -18,9 +18,9 @@
       {% for message in form.username.errors %}<p class="field-error">{{ message }}</p>{% endfor %}
     </div>
     <div class="field">
-      <label for="{{ form.passcode.id_for_label }}">Password, then touch your YubiKey</label>
+      <label for="{{ form.passcode.id_for_label }}">PIN, then touch your YubiKey</label>
       {{ form.passcode }}
-      <p class="hint">Type your password and, without a space, touch your YubiKey. A new account uses its temporary password alone.</p>
+      <p class="hint">Type the PIN of the YubiKey you use and, without a space, touch it. A new account uses its temporary password alone.</p>
       {% for message in form.passcode.errors %}<p class="field-error">{{ message }}</p>{% endfor %}
     </div>
     <button type="submit" class="primary">Sign in</button>

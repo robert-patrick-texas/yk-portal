@@ -19,12 +19,7 @@ from django.utils import timezone
 
 from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
-from yk_portal.authentication.passwords import (
-    generate_temporary_password,
-    hash_password,
-    hash_web_password,
-    validate_password,
-)
+from yk_portal.authentication.passwords import generate_temporary_password, hash_web_password
 from yk_portal.authentication.sessions import revoke_sessions
 from yk_portal.portal_settings.service import current as current_settings
 from yk_portal.yubikeys.models import YubikeyCredential
@@ -108,23 +103,46 @@ def _create(
     temporary_hash = hash_web_password(temporary)
     roles = [Role.USER, Role.ADMIN] if admin else [Role.USER]
     with transaction.atomic():
-        if User.objects.filter(username=username).exists():
-            raise ValidationError("That username is taken.", code="username_taken")
-        settings = current_settings()
-        if groups is None:
-            groups = Group.objects.filter(pk=settings.default_group)
-        groups = list(groups)
-        user = User.objects.create(
-            username=username,
+        user = _insert(
+            username,
+            actor,
+            roles,
+            groups,
+            event,
+            {},
             email=email,
             temporary_password_hash=temporary_hash,
-            temporary_password_expires_at=_temporary_expiry(settings.temp_password_hours),
+            temporary_password_expires_at=_temporary_expiry(),
         )
-        user.roles.add(*Role.objects.filter(name__in=roles))
-        user.groups.add(*groups)
-        details = {"roles": roles, "groups": sorted(g.name for g in groups)}
-        record(event, actor, user, details=details)
     return NewAccount(user, temporary)
+
+
+def _insert(
+    username: str,
+    actor: Actor,
+    roles: list[str],
+    groups: Iterable[Group] | None,
+    event: EventType,
+    details: dict[str, str],
+    **fields: object,
+) -> User:
+    """Insert an account with its roles and groups (None: the default group), and record
+    EVENT. Call it in a transaction."""
+    if User.objects.filter(username=username).exists():
+        raise ValidationError("That username is taken.", code="username_taken")
+    if groups is None:
+        groups = Group.objects.filter(pk=current_settings().default_group)
+    groups = list(groups)
+    user = User.objects.create(username=username, **fields)
+    user.roles.add(*Role.objects.filter(name__in=roles))
+    user.groups.add(*groups)
+    record(
+        event,
+        actor,
+        user,
+        details={"roles": roles, "groups": sorted(g.name for g in groups), **details},
+    )
+    return user
 
 
 def disable(user: User, actor: Actor) -> None:
@@ -138,18 +156,20 @@ def disable(user: User, actor: Actor) -> None:
 
 
 def enable(user: User, actor: Actor) -> None:
-    """DISABLED -> ACTIVE (spec §7.1), for an account that has a permanent password.
+    """DISABLED -> ACTIVE (spec §7.1), for an account with a YubiKey that has a PIN
+    (addendum §2.12).
 
     An account disabled before it finished provisioning has none: reset it to
     provisioning instead.
     """
     with _account(user, {DISABLED}) as account:
-        if not (account.password_hash or account.radius_password_hash):
+        if not _keys(account).exclude(pin_hash="", radius_pin_hash="").exists():
             raise ValidationError(
-                "This account never finished provisioning; reset it to provisioning instead.",
-                code="no_password",
+                "This account has no YubiKey with a PIN; reset it to provisioning instead.",
+                code="no_pin",
             )
-        _set_state(account, actor, ACTIVE, EventType.ACCOUNT_ENABLED, failed_login_count=0)
+        _set_state(account, actor, ACTIVE, EventType.ACCOUNT_ENABLED)
+        _clear_failures(account)
 
 
 def lock(user: User, actor: Actor) -> None:
@@ -168,7 +188,8 @@ def unlock(user: User, actor: Actor) -> None:
     """
     with _account(user, {LOCKED}) as account:
         state = PROVISIONING if account.temporary_password_hash else ACTIVE
-        _set_state(account, actor, state, EventType.ACCOUNT_UNLOCKED, failed_login_count=0)
+        _set_state(account, actor, state, EventType.ACCOUNT_UNLOCKED)
+        _clear_failures(account)
 
 
 def reset_to_provisioning(user: User, actor: Actor) -> str:
@@ -187,13 +208,13 @@ def reset_to_provisioning(user: User, actor: Actor) -> str:
             actor,
             PROVISIONING,
             EventType.ACCOUNT_RESET_TO_PROVISIONING,
-            failed_login_count=0,
             temporary_password_hash=temporary_hash,
             temporary_password_expires_at=_temporary_expiry(),
         )
+        _clear_failures(account)
         revoke_sessions(account)
         # Disabled, not deleted: a lost YubiKey can't be used, and admins still see it.
-        enabled = YubikeyCredential.objects.filter(user=account, enabled=True)
+        enabled = _keys(account).filter(enabled=True)
         public_ids = sorted(enabled.values_list("public_id", flat=True))
         if public_ids:
             enabled.update(enabled=False, updated_at=timezone.now())
@@ -213,10 +234,10 @@ def set_temporary_password(user: User, actor: Actor) -> str:
     temporary = generate_temporary_password()
     temporary_hash = hash_web_password(temporary)
     with _account(user, {PROVISIONING}) as account:
-        account.failed_login_count = 0
         account.temporary_password_hash = temporary_hash
         account.temporary_password_expires_at = _temporary_expiry()
         account.save()
+        _clear_failures(account)
         record(
             EventType.TEMPORARY_PASSWORD_SET,
             actor,
@@ -224,21 +245,6 @@ def set_temporary_password(user: User, actor: Actor) -> str:
             details={"expires_at": account.temporary_password_expires_at.isoformat()},
         )
     return temporary
-
-
-def set_password(user: User, password: str, actor: Actor) -> None:
-    """Set the user's permanent password: both hashes, from one password (addendum §2.3).
-
-    Raises:
-        ValidationError: The password breaks the policy (spec §12, addendum §2.6).
-    """
-    validate_password(password)
-    hashes = hash_password(password)
-    with _account(user) as account:
-        account.password_hash = hashes.web
-        account.radius_password_hash = hashes.radius
-        account.save()
-        record(EventType.PASSWORD_CHANGED, actor, account)
 
 
 def set_email(user: User, email: str, actor: Actor) -> None:
@@ -262,41 +268,44 @@ def set_email(user: User, email: str, actor: Actor) -> None:
 
 def complete_provisioning(user: User, actor: Actor) -> None:
     """PROVISIONING -> ACTIVE: onboarding is done (spec §13.2). The temporary password
-    stops working.
+    stops working (addendum §2.11).
 
-    Call it only after the user tested an enabled YubiKey in the same transaction, as
-    yk_portal.accounts.onboarding does.
+    Call it only after the user tested an enabled YubiKey and set its PIN in the same
+    transaction, as yk_portal.accounts.onboarding does.
 
     Raises:
-        ValidationError: The account has no email address, permanent password or
-            enabled YubiKey.
+        ValidationError: The account has no email address, or no enabled YubiKey with
+            a PIN.
     """
     with _account(user, {PROVISIONING}) as account:
         check_ready_to_finish(account)
-        if not YubikeyCredential.objects.filter(user=account, enabled=True).exists():
+        if (
+            not _keys(account)
+            .filter(enabled=True)
+            .exclude(pin_hash="", radius_pin_hash="")
+            .exists()
+        ):
             raise ValidationError("Add a YubiKey first.", code="no_yubikey")
         _set_state(
             account,
             actor,
             ACTIVE,
             EventType.PROVISIONING_COMPLETED,
-            failed_login_count=0,
             temporary_password_hash="",
             temporary_password_expires_at=None,
         )
+        _clear_failures(account)
 
 
 def check_ready_to_finish(user: User) -> None:
-    """Whether onboarding has the email address and permanent password it needs before
-    the YubiKey step.
+    """Whether onboarding has the email address it needs before the YubiKey step
+    (addendum §14.2).
 
     Raises:
-        ValidationError: One of them is missing.
+        ValidationError: It is missing.
     """
     if not user.email:
         raise ValidationError("Set your email address first.", code="no_email")
-    if not user.password_hash:
-        raise ValidationError("Set a permanent password first.", code="no_password")
 
 
 def grant_admin(user: User, actor: Actor) -> None:
@@ -361,6 +370,18 @@ def _account(
             )
         yield account
     user.refresh_from_db()
+
+
+def _keys(account: User) -> QuerySet[YubikeyCredential]:
+    return YubikeyCredential.objects.filter(user=account)
+
+
+def _clear_failures(account: User) -> None:
+    """Clear the failed-login counts of the account and of each of its YubiKeys
+    (addendum §2.14)."""
+    User.objects.filter(pk=account.pk).update(failed_login_count=0)
+    account.failed_login_count = 0
+    _keys(account).update(failed_login_count=0)
 
 
 def _set_state(

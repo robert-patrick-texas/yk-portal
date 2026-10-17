@@ -137,6 +137,8 @@ button.link {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+.field.checkbox label { display: flex; align-items: center; gap: 0.5rem; font-weight: 400; }
+.field.checkbox input { width: auto; }
 
 button.primary {
   width: 100%;

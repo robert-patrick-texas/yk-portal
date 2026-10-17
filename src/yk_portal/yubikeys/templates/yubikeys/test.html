@@ -4,7 +4,7 @@
 {% block content %}
 <section class="card">
   <h1>Test a YubiKey</h1>
-  {% if tested %}<p class="success" role="status">It works: {{ tested.label|default:tested.public_id }}.</p>{% endif %}
+  {% if tested %}<p class="success" role="status">It works: {{ tested.label|default:tested.public_id }}.{% if not tested.has_pin %} It has no PIN yet: <a href="{% url 'yubikey-pin' tested.pk %}">set one</a>.{% endif %}</p>{% endif %}
   <form method="post" novalidate>
     {% csrf_token %}
     {% include "web/field.html" with field=form.otp %}

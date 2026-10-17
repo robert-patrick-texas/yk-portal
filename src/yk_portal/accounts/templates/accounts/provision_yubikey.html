@@ -13,9 +13,11 @@
   </form>
   {% else %}
   <h1>Test your YubiKey</h1>
-  <p>An administrator set up a YubiKey for you. Touch it once to show it works.</p>
+  <p>An administrator set up a YubiKey for you. Choose its PIN, then touch it once to show it works.</p>
   <form method="post" novalidate>
     {% csrf_token %}
+    {% include "web/field.html" with field=form.pin %}
+    {% include "web/field.html" with field=form.confirm %}
     {% include "web/field.html" with field=form.otp %}
     <button type="submit" class="primary">Test it and finish</button>
   </form>

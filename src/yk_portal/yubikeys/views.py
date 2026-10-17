@@ -1,4 +1,5 @@
-"""A signed-in user's YubiKeys (spec §20): list, add, test, edit, disable, remove."""
+"""A signed-in user's YubiKeys (spec §20): list, add, test, edit, set the PIN, disable,
+remove."""
 
 import uuid
 
@@ -9,10 +10,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from yk_portal.accounts.models import User
 from yk_portal.accounts.views import otp_message
 from yk_portal.authentication.access import active_required
-from yk_portal.authentication.sessions import PortalRequest, request_actor
+from yk_portal.authentication.passwords import hash_pin
+from yk_portal.authentication.sessions import PortalRequest, request_actor, revoke_sessions
 
 from . import management
-from .forms import OtpForm, YubikeyEditForm, YubikeyForm
+from .forms import ChangePinForm, OtpForm, YubikeyEditForm, YubikeyForm
 from .models import ProvisioningMethod, YubikeyCredential
 from .otp import OtpRejected
 
@@ -56,6 +58,7 @@ def add(request: PortalRequest) -> HttpResponse:
                 form.new_yubikey(),
                 ProvisioningMethod.SELF_PROVISIONED,
                 form.cleaned_data["otp"],
+                hash_pin(form.cleaned_data["pin"]),
             )
         except ValidationError as e:
             form.add_service_error(e)
@@ -94,6 +97,33 @@ def edit(request: PortalRequest, credential_id: uuid.UUID) -> HttpResponse:
         )
         return redirect("yubikeys")
     return render(request, "yubikeys/edit.html", {"form": form, "credential": credential})
+
+
+@active_required
+def pin(request: PortalRequest, credential_id: uuid.UUID) -> HttpResponse:
+    """Set or change a YubiKey's PIN, proven by an OTP from it (addendum §2.15). The user's
+    other sessions end, as for a password change (spec §19)."""
+    credential = _own(request, credential_id)
+    form = ChangePinForm(request.POST if request.method == "POST" else None)
+    if form.is_valid():
+        account = _account(request)
+        try:
+            management.change_pin(
+                credential,
+                request_actor(request),
+                form.cleaned_data["pin"],
+                form.cleaned_data["otp"],
+                form.cleaned_data["everywhere"],
+            )
+        except OtpRejected as e:
+            form.add_error("otp", otp_message(e.reason))
+        except ValidationError as e:
+            other_yubikey = e.error_list[0].code == "other_yubikey"
+            form.add_error("otp" if other_yubikey else "pin", e)
+        else:
+            revoke_sessions(account, keep=request.portal_session)
+            return redirect("yubikeys")
+    return render(request, "yubikeys/pin.html", {"form": form, "credential": credential})
 
 
 @active_required

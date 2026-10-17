@@ -6,7 +6,7 @@
 
 This addendum records decisions made after the spec was written. Where the
 two disagree, this addendum wins. Section references such as "spec §22" point
-to the baseline document. Section 14 lists the decisions and where each one
+to the baseline document. Section 15 lists the decisions and where each one
 is applied.
 
 ---
@@ -32,8 +32,8 @@ radiator-yubikey. It treats these radiator-yubikey interfaces as fixed:
 spec §4.3). It never adds tables to radiator-yubikey's database.
 
 1.4 **yk-portal owns the data of its users.** For a user who is in
-yk-portal, yk-portal is the only place to change the account, its password
-and its YubiKeys. A change made directly in Radiator's database with
+yk-portal, yk-portal is the only place to change the account, its YubiKeys
+and their PINs. A change made directly in Radiator's database with
 `yubikey-db.sh` (for example disabling a key) is overwritten by the next load
 of a yk-portal export. The one exception is counters: they only ever move
 forward, in both systems (sections 6.4 and 7.5).
@@ -44,23 +44,31 @@ the other when one does.
 
 ---
 
-## 2. Passwords: two hashes
+## 2. PINs, passwords and account states
 
-Supersedes spec §12.1 and §22.1 where they say Argon2id is the only form.
+Supersedes spec §12.1 and §22.1 where they say Argon2id is the only form,
+and spec §16 where it says the password belongs to the account.
 
-2.1 Passwords are hashed, never stored reversibly (spec §52 item 4 stands).
+2.1 PINs and passwords are hashed, never stored reversibly (spec §52 item 4
+stands).
 
-2.2 Each account has two password hashes:
+2.2 **Each YubiKey has its own PIN**, typed before its OTP, at the yk-portal
+web login (spec §16's "password") and in Radiator. A user may give all their
+YubiKeys one PIN, or each its own. The PIN is stored on the YubiKey
+credential as two hashes:
 
 | Field | Algorithm | Used for |
 |---|---|---|
-| `password_hash` | Argon2id, unique random salt | yk-portal web login |
-| `radius_password_hash` | SHA-512 crypt, stored as `{crypt}$6$<salt>$<hash>` | Export to radiator-yubikey (the PIN typed before the OTP in Radiator) |
+| `pin_hash` | Argon2id, unique random salt | yk-portal web login |
+| `radius_pin_hash` | SHA-512 crypt, stored as `{crypt}$6$<salt>$<hash>` | Export to radiator-yubikey (each row's password column) |
 
-2.3 Today both hashes come from the same password. Setting or changing a
-permanent password (onboarding, user change) computes both at once from the
-plaintext, which is then discarded. The schema keeps them separate so a
-later version can let the RADIUS PIN differ from the web password.
+The web login checks the PIN of the YubiKey whose OTP ends the passcode. An
+account has no password of its own, only a temporary password while it is
+PROVISIONING (section 2.5).
+
+2.3 Both hashes come from the same PIN, computed at once when it is set; the
+plaintext is then discarded. Each YubiKey's hashes have their own salts, so
+the stored hashes don't show which YubiKeys share a PIN.
 
 2.4 SHA-512 crypt format must match what `yubikey-db.sh` produces:
 
@@ -75,26 +83,31 @@ later version can let the RADIUS PIN differ from the web password.
 2.5 Temporary passwords get only an Argon2id hash. They are never exported
 to Radiator.
 
-2.6 Password policy stays as in spec §12 (8 to 80 characters, at least one
-letter and one number), with one addition: a password must not end with `:`,
-because Radiator accepts `PIN:OTP` and could read a trailing colon as the
-separator.
+2.6 PINs follow spec §12's password policy (8 to 80 characters, at least one
+letter and one number), with these additions:
 
-2.7 `radius_password_hash` is stored as the `{crypt}` string itself, not
+- a password must not end with `:`, because Radiator accepts `PIN:OTP` and
+  could read a trailing colon as the separator;
+- the limit of 80 is counted in bytes of UTF-8, where a character outside
+  ASCII takes 2 to 4, because RADIUS carries at most 128 bytes of password,
+  and the PIN, `:` and the 44-character OTP must fit;
+- control characters, such as tab or line break, are rejected.
+
+2.7 `radius_pin_hash` is stored as the `{crypt}` string itself, not
 encrypted. (Decided: encrypting it with the master key was considered and
 not adopted.)
 
-2.8 An account imported from Radiator (section 7) may have only a
-`radius_password_hash`. Its first web login goes through the normal login
-flow (spec §16, including the OTP), with the password checked against the
-SHA-512 hash; on success, the Argon2id `password_hash` is created from the
-password typed. A failure counts toward lockout like any other.
+2.8 A YubiKey imported from Radiator (section 7) may have only a
+`radius_pin_hash`. Its first web login goes through the normal login flow
+(spec §16, including the OTP), with the PIN checked against the SHA-512
+hash; on success, the Argon2id `pin_hash` is created from the PIN typed. A
+failure counts toward lockout like any other.
 
-2.9 The web login also accepts `password:OTP`, as Radiator does: one `:`
-right before the OTP is dropped before the password is checked (a password
-can't end with `:`, section 2.6). The standard form, the one the login page
-asks for, stays the password followed directly by the OTP; the colon form is
-tolerated, not offered.
+2.9 The web login also accepts `PIN:OTP`, as Radiator does: one `:` right
+before the OTP is dropped before the PIN is checked (a PIN can't end with
+`:`, section 2.6). The standard form, the one the login page asks for, stays
+the PIN followed directly by the OTP; the colon form is tolerated, not
+offered.
 
 2.10 PROVISIONING accounts lock too. Consecutive failed logins with the
 temporary password count toward the failed-login limit (section 3.2) as
@@ -102,6 +115,46 @@ spec §18.1 says, and reaching it moves the account from PROVISIONING to
 LOCKED. This adds PROVISIONING -> LOCKED to the transitions of spec §7.1.
 Unlocking an account that still has a temporary password (it never finished
 provisioning) returns it to PROVISIONING, not ACTIVE.
+
+2.11 The temporary password stays valid until onboarding completes
+(PROVISIONING -> ACTIVE), which clears it (spec §11), or until it expires.
+
+2.12 Enabling a DISABLED account (DISABLED -> ACTIVE) needs a YubiKey with a
+PIN, either hash of section 2.2. An account disabled before it finished
+provisioning has none: an admin resets it to provisioning instead.
+
+2.13 An "enabled admin", which spec §9.1 keeps at least one of, is an
+account with the admin role in any state but DISABLED. PROVISIONING and
+LOCKED admins count.
+
+2.14 **Failed logins count per YubiKey and per account** (adds to spec §18):
+
+- A failure after the OTP's public ID named one of the account's enabled
+  YubiKeys (a wrong PIN, an OTP that doesn't decrypt or carries another
+  private ID, a replayed OTP) counts against that YubiKey.
+- A failure that names none of them (a malformed OTP, an unknown public ID,
+  another user's YubiKey, a disabled YubiKey, a wrong temporary password)
+  counts against the account.
+- The account locks when any one count reaches the failed-login limit
+  (section 3.2). Each YubiKey gets that many PIN guesses; failures with
+  different YubiKeys don't add up.
+- A successful login clears the count of the YubiKey used and the account's.
+  The other YubiKeys' counts stay, so a stolen YubiKey gets no more guesses
+  while its owner keeps signing in with another one.
+- Unlocking, enabling, resetting to provisioning, issuing a temporary
+  password and completing onboarding clear every count.
+- `LOGIN_FAILURE` events name the YubiKey (public ID) a failure counted
+  against.
+
+2.15 Users set or change a YubiKey's PIN on its page, with an OTP from that
+YubiKey (they must hold it), and may give the same PIN to all their
+YubiKeys at once. Their other sessions end (spec §19). An admin-provisioned
+YubiKey gets its PIN from its owner: at the test during onboarding, or later
+on its page. Each change records `PASSWORD_CHANGED` with the public IDs.
+
+2.16 An admin can set the PIN of any user's YubiKey, without an OTP from it,
+as root can set any user's password on Linux (the admin pages, spec Phase
+6). It is audited like the user's own change.
 
 ---
 
@@ -123,7 +176,7 @@ database, validated against the ranges below, and every change creates a
 | Idle session timeout | 20 minutes | 5 to 240 minutes |
 | Maximum session length | 12 hours | 1 to 24 hours |
 | Temporary password lifetime | 72 hours | 1 to 336 hours |
-| Failed logins before an account locks | 3 | 1 to 10 |
+| Failed logins before an account locks (section 2.14) | 3 | 1 to 10 |
 | Maximum YubiKeys per user | 10 | 1 to 10 |
 | Require password + OTP again before revealing a key's private ID or AES key | on | on / off |
 | Default group | none | none, or any group |
@@ -229,7 +282,7 @@ hashed password a second time.
 | `public_id` | 12 modhex characters |
 | `private_id` | 12 lowercase hex characters, decrypted |
 | `aes_key` | 32 lowercase hex characters, decrypted (radiator-yubikey stores it as base64) |
-| `password` | `radius_password_hash` (`{crypt}$6$...`), or empty if the account has none |
+| `password` | The YubiKey's `radius_pin_hash` (`{crypt}$6$...`), or empty if it has no PIN |
 | `active` | `1` only if the account is ACTIVE and the key is enabled, otherwise `0` |
 | `created` | The credential's creation time, UTC, `YYYY-MM-DD HH:MM:SS` |
 | `accessed` | The key's last successful use known to yk-portal, same format, or empty |
@@ -297,17 +350,25 @@ yk-portal radiator-import [--dry-run] [--skip-invalid] [--counters-only] FILE|-
 - Every row is validated first. If any row is invalid, nothing is imported
   unless `--skip-invalid` is given. The valid rows are loaded in one
   transaction. `--dry-run` reports what would happen and changes nothing.
-- The report lists each row's outcome (user created, key added, counters
-  moved forward, unchanged, skipped or invalid with the reason) by username
-  and public ID, never a secret, then totals.
+- The report lists each row's outcome in a few words (added, new account,
+  counters moved forward, unchanged, skipped or invalid with the reason,
+  such as `skipped: reserved username`) by line, username and public ID,
+  never a secret, then the totals that aren't zero.
 - Audit: a `RADIATOR_IMPORT_COMPLETED` event with the mode and totals, plus
   `ACCOUNT_CREATED` and `YUBIKEY_ADDED` for each account and key created.
+  The `RADIATOR_IMPORT_COMPLETED` event is recorded only when the import
+  added YubiKeys (and created accounts). Moving counters forward is routine
+  and isn't audited, so a counter sync records no event; neither does a run
+  that changes nothing, or a dry run.
 
 7.2 Full import, for each row:
 
 - **Username** must meet section 9 (lowercase, allowed characters, not
   `svc.` or `anycast-`). Otherwise the row is invalid. Usernames are not
-  lowercased automatically, because Radiator matches them exactly.
+  lowercased automatically, because Radiator matches them exactly. With
+  `--skip-invalid`, a row whose username is reserved for Radiator (`svc.`,
+  `anycast-`, such as the anycast check's accounts) is reported as skipped,
+  not invalid: `--skip-invalid` is how such rows are left out.
 - **Public ID already in yk-portal:**
   - same user, same private ID and AES key: only the counters move forward
     (section 7.5); nothing else changes (section 1.4);
@@ -315,33 +376,30 @@ yk-portal radiator-import [--dry-run] [--skip-invalid] [--counters-only] FILE|-
     (conflicts with yk-portal's data).
 - **Public ID new to yk-portal:**
   - user not in yk-portal: the account is created in state ACTIVE, with the
-    `user` role, the default group if one is set, no email and no Argon2id
-    hash (section 2.8);
+    `user` role, the default group if one is set and no email;
   - user in yk-portal: the key is added to that account, subject to the
     maximum YubiKeys per user;
   - the key gets `provisioning_method = MIGRATED`, `enabled` from `active`,
     the label, the slot from the label when it contains `slot 1` or `slot 2`
     (otherwise unset, for an admin to fill in), counters from `counter` and
-    `low`, `created_at` from `created`, `last_used_at` from `accessed`, and
-    its private ID and AES key encrypted with the master key. `high` is
-    ignored (Radiator always stores 0).
+    `low`, `created_at` from `created`, `last_used_at` from `accessed`, its
+    PIN from `password` (section 7.3), and its private ID and AES key
+    encrypted with the master key. `high` is ignored (Radiator always
+    stores 0).
 
-7.3 Password column:
+7.3 Password column, the YubiKey's PIN:
 
 | Value | Result |
 |---|---|
-| `{crypt}$6$...` | Becomes `radius_password_hash` as is |
-| empty | No password |
-| plain text, or `{clear}...` | Hashed at import into both `password_hash` (Argon2id) and `radius_password_hash` (SHA-512 crypt); the plain text is not kept |
-| any other format (`{SSHA}`, `$5$`, `$1$`, `$2a$`, ...) | Row invalid |
+| `{crypt}$6$...` | Becomes `radius_pin_hash` as is (section 2.8) |
+| empty | No PIN |
+| plain text, or `{clear}...` | Hashed at import into both `pin_hash` (Argon2id) and `radius_pin_hash` (SHA-512 crypt); the plain text is not kept. Taken as Radiator has it: the password policy (section 2.6) isn't applied, as it can't be to a `{crypt}` hash. A control character makes the row invalid |
+| any other format (`{SSHA}`, `$5$`, `$1$`, `$2a$`, ..., and `$6$...` without `{crypt}`) | Row invalid |
 
-An account that already has a `radius_password_hash` in yk-portal keeps it.
+A YubiKey yk-portal has keeps its PIN (section 1.4).
 
-7.4 Radiator stores a PIN per key, yk-portal one password per account. When
-one user's rows carry different password strings (which is always the case
-with `{crypt}` hashes, even for the same PIN, because each has its own salt),
-the importer uses the one from the row with the latest `accessed` and warns
-that after the next export all that user's keys will use that PIN.
+7.4 Radiator and yk-portal both store a PIN per YubiKey (section 2.2): each
+imported YubiKey keeps its own.
 
 7.5 **Counter sync** (`--counters-only`, and part of every full import):
 
@@ -430,7 +488,6 @@ the reverse proxy (proposed gunicorn under systemd).
   use the same SHA-512 crypt format in `service_accounts.password`.
 - Exporting groups and memberships to radiator-yubikey, and managing its
   device access and TACACS+ rules.
-- A RADIUS PIN that differs from the web password (section 2.3).
 - A web download of the export.
 
 ---
@@ -439,10 +496,12 @@ the reverse proxy (proposed gunicorn under systemd).
 
 Adds to spec §25 and §27.
 
-- `users`: `password_hash` may be empty (imported accounts, section 2.8);
-  add `radius_password_hash` (nullable) and `theme` (`browser`, `light`,
-  `dark`).
+- `users`: no password hash (the PINs are on the YubiKeys, section 2.2);
+  keep `failed_login_count` for failures that name no YubiKey (section
+  2.14); add `theme` (`browser`, `light`, `dark`).
 - `yubikey_credentials`: `slot_number` may be empty for imported keys; add
+  `pin_hash` and `radius_pin_hash` (both may be empty: no PIN yet, or an
+  imported key, section 2.8), `failed_login_count` (section 2.14), and
   `migration_source` (spec §21 optional field), set to
   `radiator-yubikey export` by the importer.
 - `groups`: `id`, `name` (unique, case-insensitive), `description`,
@@ -481,11 +540,36 @@ Adds to spec §25 and §27.
 | 14 | Audit retention | Kept indefinitely; no automatic purge |
 | 15 | Audit copy outside the database | Also written to the system journal |
 | 16 | External API | No |
-| 17 | Password rule | Spec §12, plus section 2.6 |
+| 17 | PIN rule | Spec §12's password rule, plus section 2.6 |
 
 ---
 
-## 14. Decision log
+## 14. Onboarding and YubiKey pages
+
+Adds to spec §11, §13 and §20.
+
+14.1 Temporary passwords are generated, never typed by an admin: 19
+characters in four groups of four, such as `k7mq-3xwe-p9fa-h2nt`, from
+lowercase letters and digits without the easily confused `0 o 1 i l`, with
+at least one letter and one digit (about 79 bits).
+
+14.2 Onboarding requires an email address: the YubiKey step, which sets the
+YubiKey's PIN and completes onboarding, needs it first.
+
+14.3 Users can't disable or remove their last enabled YubiKey while their
+account is ACTIVE: without it they can't sign in. Admins can.
+
+14.4 The page where users test a YubiKey says why an OTP was refused (for
+example, a replayed OTP, or one from another YubiKey). The login page stays
+generic (spec §39).
+
+14.5 The page where users remove a YubiKey says nothing about Radiator. The
+admin pages keep the `yubikey-db.sh delete` reminder of section 6.6 until the
+live connector (section 11) carries removals.
+
+---
+
+## 15. Decision log
 
 | Date | Decision | Applied in |
 |---|---|---|
@@ -504,3 +588,22 @@ Adds to spec §25 and §27.
 | 2026-10-16 | The web login tolerates `password:OTP`; password + OTP stays the standard form | 2.9 |
 | 2026-10-16 | PROVISIONING accounts lock after consecutive failed logins reach the limit | 2.10 |
 | 2026-10-16 | Unlocking an account that still has a temporary password returns it to PROVISIONING | 2.10 |
+| 2026-10-16 | The password limit is 80 bytes of UTF-8; control characters are rejected | 2.6 |
+| 2026-10-16 | The temporary password stays valid until onboarding completes | 2.11 |
+| 2026-10-16 | Enabling a DISABLED account needs a permanent password (a YubiKey with a PIN since 2026-10-17) | 2.12 |
+| 2026-10-16 | An enabled admin is an admin in any state but DISABLED | 2.13 |
+| 2026-10-16 | Temporary passwords: generated, 19 characters, `xxxx-xxxx-xxxx-xxxx` | 14.1 |
+| 2026-10-16 | Email is required during onboarding | 14.2 |
+| 2026-10-16 | Users keep their last enabled YubiKey; admins can take it | 14.3 |
+| 2026-10-16 | The key-test page says why an OTP was refused | 14.4 |
+| 2026-10-16 | The user's remove page says nothing about Radiator | 14.5 |
+| 2026-10-16 | Imported plain-text PINs are taken as Radiator has them, without the password policy | 7.3 |
+| 2026-10-16 | A `$6$` hash without `{crypt}` is rejected at import | 7.3 |
+| 2026-10-16 | With `--skip-invalid`, rows for usernames reserved for Radiator are skipped, not invalid | 7.2 |
+| 2026-10-16 | The import's audit event is recorded only when the import changed something (narrowed 2026-10-17) | 7.1 |
+| 2026-10-17 | Each YubiKey has its own PIN; the web login checks the PIN of the YubiKey used; accounts have no password but the temporary one | 2.2, 2.3 |
+| 2026-10-17 | Failed logins count per YubiKey and per account; any one count at the limit locks the account; a success clears only its YubiKey's count and the account's | 2.14 |
+| 2026-10-17 | Users change a YubiKey's PIN with an OTP from it, optionally on all their YubiKeys; other sessions end | 2.15 |
+| 2026-10-17 | Admins can set any user's YubiKey PIN, as root can set any user's password | 2.16 |
+| 2026-10-17 | Import report lines are short, such as `skipped: reserved username` | 7.1 |
+| 2026-10-17 | The import's audit event is recorded only when YubiKeys were added; moving counters is routine | 7.1 |

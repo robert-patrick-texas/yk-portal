@@ -4,6 +4,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from yk_portal.accounts.models import AccountState
 from yk_portal.audit.models import AuditEvent, EventType
 from yk_portal.audit.service import Actor
+from yk_portal.authentication.passwords import PinHashes, check_web_password
+from yk_portal.core import sha512_crypt
 from yk_portal.portal_settings import service as portal_settings
 from yk_portal.yubikeys import management
 from yk_portal.yubikeys.management import NewYubikey
@@ -18,6 +20,8 @@ K1 = "6b1f0a9d2c7e4f3a8b5d0c1e9f2a7b6d"
 K2 = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 SELF = ProvisioningMethod.SELF_PROVISIONED
 ADMIN = ProvisioningMethod.ADMIN_PROVISIONED
+PIN = "Passw0rd!"
+PIN_HASHES = PinHashes(web="argon2$test", radius="{crypt}$6$test")
 
 
 def new_key(
@@ -78,7 +82,9 @@ def test_parse_aes_key():
 
 
 def test_self_provisioned_key_is_proven_by_its_otp(user, actor, otp):
-    credential = management.add_yubikey(user, actor, new_key(label="primary"), SELF, otp(7, 3))
+    credential = management.add_yubikey(
+        user, actor, new_key(label="primary"), SELF, otp(7, 3), PIN_HASHES
+    )
     assert credential.user == user
     assert credential.public_id == PUBLIC_ID
     assert credential.private_id() == bytes.fromhex(PRIVATE_ID)
@@ -86,6 +92,7 @@ def test_self_provisioned_key_is_proven_by_its_otp(user, actor, otp):
     assert (credential.last_usage_counter, credential.last_session_counter) == (7, 3)
     assert credential.last_used_at is not None
     assert credential.provisioning_method == SELF
+    assert (credential.pin_hash, credential.radius_pin_hash) == ("argon2$test", "{crypt}$6$test")
     assert credential.slot_number == 2
     event = AuditEvent.objects.get()
     assert event.event_type == EventType.YUBIKEY_ADDED
@@ -100,7 +107,7 @@ def test_self_provisioned_key_is_proven_by_its_otp(user, actor, otp):
 
 
 def test_the_same_otp_doesnt_work_again_after_adding(user, actor, otp):
-    credential = management.add_yubikey(user, actor, new_key(), SELF, otp(7, 3))
+    credential = management.add_yubikey(user, actor, new_key(), SELF, otp(7, 3), PIN_HASHES)
     with pytest.raises(OtpRejected) as excinfo:
         management.check_yubikey(user, otp(7, 3))
     assert excinfo.value.reason == Rejection.REPLAYED
@@ -113,12 +120,15 @@ def test_admin_pre_provisioning_needs_no_otp(user, make_user):
     assert (credential.last_usage_counter, credential.last_session_counter) == (0, 0)
     assert credential.last_used_at is None
     assert credential.created_by == admin
+    assert not credential.has_pin  # its owner chooses it
     assert AuditEvent.objects.get().details["tested"] is False
 
 
-def test_self_provisioning_needs_an_otp(user, actor):
-    with pytest.raises(ValueError, match="test OTP"):
-        management.add_yubikey(user, actor, new_key(), SELF)
+def test_self_provisioning_needs_an_otp_and_a_pin(user, actor, otp):
+    with pytest.raises(ValueError, match="a test OTP and a PIN"):
+        management.add_yubikey(user, actor, new_key(), SELF, pin=PIN_HASHES)
+    with pytest.raises(ValueError, match="a test OTP and a PIN"):
+        management.add_yubikey(user, actor, new_key(), SELF, otp(1))
 
 
 @pytest.mark.parametrize(
@@ -132,7 +142,7 @@ def test_self_provisioning_needs_an_otp(user, actor):
 )
 def test_an_otp_that_doesnt_fit_adds_nothing(user, actor, otp, make, code):
     with pytest.raises(ValidationError) as excinfo:
-        management.add_yubikey(user, actor, new_key(), SELF, make(otp))
+        management.add_yubikey(user, actor, new_key(), SELF, make(otp), PIN_HASHES)
     assert code_of(excinfo) == code
     assert not YubikeyCredential.objects.exists()
     assert not AuditEvent.objects.exists()
@@ -140,7 +150,7 @@ def test_an_otp_that_doesnt_fit_adds_nothing(user, actor, otp, make, code):
 
 def test_public_id_is_normalized(user, actor, otp):
     credential = management.add_yubikey(
-        user, actor, new_key(public_id=" VVCCCCBBCDEF "), SELF, otp(1)
+        user, actor, new_key(public_id=" VVCCCCBBCDEF "), SELF, otp(1), PIN_HASHES
     )
     assert credential.public_id == PUBLIC_ID
 
@@ -181,6 +191,79 @@ def test_values_are_checked(user, actor, key, code):
     with pytest.raises(ValidationError) as excinfo:
         management.add_yubikey(user, actor, key, ADMIN)
     assert code_of(excinfo) == code
+
+
+# PINs (addendum §2.2, §2.15)
+
+
+def test_set_pin_gives_each_key_its_own_salts(user, actor, make_credential):
+    keys = [make_credential(user), make_credential(user)]
+    management.set_pin(user, keys, PIN, actor)
+    for key in keys:
+        key.refresh_from_db()
+        assert check_web_password(PIN, key.pin_hash)
+        assert sha512_crypt.check_hash(PIN, key.radius_pin_hash)
+    assert keys[0].radius_pin_hash != keys[1].radius_pin_hash
+    event = AuditEvent.objects.get()
+    assert event.event_type == EventType.PASSWORD_CHANGED
+    assert event.details == {"public_ids": sorted(k.public_id for k in keys)}
+
+
+def test_set_pin_applies_the_policy(user, actor, make_credential):
+    key = make_credential(user)
+    with pytest.raises(ValidationError):
+        management.set_pin(user, [key], "short1", actor)
+    assert not AuditEvent.objects.exists()
+
+
+def test_set_pin_only_on_the_users_keys(user, actor, make_user, make_credential):
+    with pytest.raises(ValueError, match="not one of alice's YubiKeys"):
+        management.set_pin(user, [make_credential(make_user("bob"))], PIN, actor)
+
+
+@pytest.fixture
+def two_keys(user, make_credential):
+    return (
+        make_credential(user, public_id=PUBLIC_ID, private_id=PRIVATE_ID, aes_key=K1),
+        make_credential(user, pin_hash="", radius_pin_hash=""),
+    )
+
+
+def test_change_pin_with_an_otp_from_the_key(user, actor, otp, two_keys):
+    first, second = two_keys
+    management.change_pin(first, actor, PIN, otp(5))
+    assert check_web_password(PIN, first.pin_hash)
+    assert (first.last_usage_counter, first.last_session_counter) == (5, 0)
+    second.refresh_from_db()
+    assert not second.has_pin
+
+
+def test_change_pin_everywhere(user, actor, otp, two_keys):
+    first, second = two_keys
+    management.change_pin(first, actor, PIN, otp(5), everywhere=True)
+    second.refresh_from_db()
+    assert check_web_password(PIN, second.pin_hash)
+    assert AuditEvent.objects.get().details == {"public_ids": sorted(k.public_id for k in two_keys)}
+
+
+def test_change_pin_needs_an_otp_from_that_key(user, actor, otp, two_keys, rejected):
+    first, second = two_keys
+    with pytest.raises(ValidationError) as excinfo:
+        management.change_pin(second, actor, PIN, otp(5))
+    assert code_of(excinfo) == "other_yubikey"
+    with rejected(Rejection.BAD_CRC):
+        management.change_pin(first, actor, PIN, otp(5, aes_key=K2))
+    management.change_pin(first, actor, PIN, otp(5))
+    with rejected(Rejection.REPLAYED):
+        management.change_pin(first, actor, PIN, otp(5))
+    assert not AuditEvent.objects.filter(event_type=EventType.LOGIN_FAILURE).exists()
+
+
+def test_a_pin_that_breaks_the_policy_leaves_the_otp_unused(user, actor, otp, two_keys):
+    first, _ = two_keys
+    with pytest.raises(ValidationError):
+        management.change_pin(first, actor, "short1", otp(5))
+    management.change_pin(first, actor, PIN, otp(5))
 
 
 # Testing, editing, disabling, removing

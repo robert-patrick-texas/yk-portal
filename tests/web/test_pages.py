@@ -8,14 +8,14 @@ from django.urls import reverse
 from yk_portal.accounts import services
 from yk_portal.accounts.models import AccountState, Theme, User
 from yk_portal.authentication.models import Session
-from yk_portal.authentication.passwords import hash_password
+from yk_portal.authentication.passwords import hash_pin
 from yk_portal.authentication.sessions import COOKIE
 from yk_portal.portal_settings import service as portal_settings
 from yk_portal.web.context_processors import THEME_COOKIE
 
 pytestmark = pytest.mark.django_db
 
-PASSWORD = "Passw0rd!"  # noqa: S105 - a test password
+PIN = "Passw0rd!"
 PUBLIC_ID = "vvccccbbcdef"
 PRIVATE_ID = "4a6f8e2d1c3b"
 K1 = "6b1f0a9d2c7e4f3a8b5d0c1e9f2a7b6d"
@@ -24,20 +24,27 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "yk_portal"
 
 @pytest.fixture(scope="session")
 def hashes():
-    return hash_password(PASSWORD)
+    return hash_pin(PIN)
 
 
 @pytest.fixture
 def alice(make_user, make_credential, hashes):
-    user = make_user("alice", password_hash=hashes.web, radius_password_hash=hashes.radius)
-    make_credential(user, public_id=PUBLIC_ID, private_id=PRIVATE_ID, aes_key=K1)
+    user = make_user("alice")
+    make_credential(
+        user,
+        public_id=PUBLIC_ID,
+        private_id=PRIVATE_ID,
+        aes_key=K1,
+        pin_hash=hashes.web,
+        radius_pin_hash=hashes.radius,
+    )
     return user
 
 
 @pytest.fixture
 def passcode(make_otp):
-    """passcode(session): alice's password and a fresh OTP."""
-    return lambda session: PASSWORD + make_otp(PUBLIC_ID, PRIVATE_ID, K1, 3, session)
+    """passcode(session): alice's PIN and a fresh OTP."""
+    return lambda session: PIN + make_otp(PUBLIC_ID, PRIVATE_ID, K1, 3, session)
 
 
 def sign_in(client: Client, username: str, passcode: str):
@@ -94,14 +101,14 @@ def test_sign_in_and_out(client, alice, passcode):
 
 def test_every_failure_looks_the_same(client, alice, passcode, make_otp):
     pages = [
-        sign_in(client, "alice", "wrong-pw1" + passcode(1)[len(PASSWORD) :]),
+        sign_in(client, "alice", "wrong-pin1" + passcode(1)[len(PIN) :]),
         sign_in(client, "nobody", passcode(2)),
-        sign_in(client, "alice", PASSWORD + make_otp(PUBLIC_ID, "111111111111", K1, 3, 3)),
+        sign_in(client, "alice", PIN + make_otp(PUBLIC_ID, "111111111111", K1, 3, 3)),
     ]
     assert {page.status_code for page in pages} == {200}
     bodies = {without_csrf_tokens(page.content).replace("nobody", "alice") for page in pages}
     assert len(bodies) == 1
-    assert "Sign-in failed. Check your username, password and YubiKey." in bodies.pop()
+    assert "Sign-in failed. Check your username, PIN and YubiKey." in bodies.pop()
     assert COOKIE not in pages[0].cookies
 
 

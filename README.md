@@ -1,7 +1,7 @@
 # yk-portal
 
 A self-hosted web portal where network operations staff sign in with a
-password and a YubiKey OTP, and where admins manage user accounts, groups and
+YubiKey's PIN and its OTP, and where admins manage user accounts, groups and
 YubiKey OTP credentials. Accounts and keys are stored in SQLite (the default)
 or PostgreSQL.
 
@@ -13,14 +13,14 @@ syncs counters from it. It never changes radiator-yubikey itself.
 
 **Status:** spec Phases 1 to 5 done, except the radiator-yubikey import and
 export: configuration file, master key, AES-256-GCM encryption, Argon2id and
-SHA-512 crypt hashing; accounts and their states, temporary passwords, the
-password policy, roles with last-admin protection, groups, the database-backed
-settings and audit events, and the `bootstrap-admin`, `create-admin` and
-`reset-admin` commands; YubiKey credentials with encrypted secrets and Yubico
-OTP checking; the sign-in page, lockout, sessions and themes; onboarding
-(email, permanent password, then adding and testing a YubiKey, or testing one
-an admin set up), and each user's YubiKey pages (add, test, edit, disable,
-remove). The admin pages come next.
+SHA-512 crypt hashing; accounts and their states, temporary passwords, roles
+with last-admin protection, groups, the database-backed settings and audit
+events, and the `bootstrap-admin`, `create-admin` and `reset-admin`
+commands; YubiKey credentials with encrypted secrets, a PIN each, and Yubico
+OTP checking; the sign-in page, lockout counted per YubiKey, sessions and
+themes; onboarding (email, then adding a YubiKey and its PIN, or testing one
+an admin set up and choosing its PIN), and each user's YubiKey pages (add,
+test, edit, set the PIN, disable, remove). The admin pages come next.
 
 ## Documents
 
@@ -113,7 +113,7 @@ printed once and expires after the temporary password lifetime setting
 | `src/yk_portal/settings/` | Django settings: `base`, `dev`, `test`, `production` |
 | `src/yk_portal/core/` | Configuration, master key, AES-256-GCM encryption, SHA-512 crypt |
 | `src/yk_portal/accounts/` | Users, roles, account states, groups |
-| `src/yk_portal/authentication/` | Login, passwords, lockout, sessions, step-up |
+| `src/yk_portal/authentication/` | Login, PINs and temporary passwords, lockout, sessions, step-up |
 | `src/yk_portal/yubikeys/` | YubiKey credentials, OTP validation, replay counters |
 | `src/yk_portal/audit/` | Audit events |
 | `src/yk_portal/portal_settings/` | The admin settings page and run-time settings |

@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from yk_portal.accounts.models import AccountState, Role, User
 from yk_portal.audit.service import Actor
+from yk_portal.authentication.passwords import hash_pin
 from yk_portal.core.master_key import create_master_key
 from yk_portal.yubikeys import modhex
 from yk_portal.yubikeys.models import ProvisioningMethod, YubikeyCredential
@@ -36,10 +37,7 @@ def master_key(master_key_path, settings) -> str:
 
 @pytest.fixture
 def make_user(db):
-    """Make an account directly, without the services: fast, and without audit events.
-
-    It has both password hashes (dummies) unless they are given.
-    """
+    """Make an account directly, without the services: fast, and without audit events."""
 
     def make(
         username: str = "",
@@ -47,8 +45,6 @@ def make_user(db):
         admin: bool = False,
         **fields: object,
     ) -> User:
-        fields.setdefault("password_hash", "argon2$dummy")
-        fields.setdefault("radius_password_hash", "{crypt}$6$dummy")
         user = User.objects.create(
             username=username or f"user{next(_numbers)}", state=state, **fields
         )
@@ -100,16 +96,25 @@ def make_otp():
 
 @pytest.fixture
 def make_credential(master_key, make_user):
-    """Make a credential directly, with its secrets encrypted under the test master key."""
+    """Make a credential directly, with its secrets encrypted under the test master key.
+
+    It has the hashes of PIN, or else dummy PIN hashes unless they are given.
+    """
 
     def make(
         user: User | None = None,
         public_id: str = "",
         private_id: str = "",
         aes_key: str = K1,
+        pin: str | None = None,
         **fields: object,
     ) -> YubikeyCredential:
         fields.setdefault("provisioning_method", ProvisioningMethod.ADMIN_PROVISIONED)
+        if pin is not None:
+            hashes = hash_pin(pin)
+            fields |= {"pin_hash": hashes.web, "radius_pin_hash": hashes.radius}
+        fields.setdefault("pin_hash", "argon2$dummy")
+        fields.setdefault("radius_pin_hash", "{crypt}$6$dummy")
         credential = YubikeyCredential(
             user=user or make_user(), public_id=public_id or next(_public_ids), **fields
         )
