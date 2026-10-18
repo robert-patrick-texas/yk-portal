@@ -5,11 +5,13 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from yk_portal.accounts import services
-from yk_portal.accounts.groups import create_group
+from yk_portal.accounts.groups import add_member, create_group
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import AuditEvent, EventType
 from yk_portal.audit.service import Actor
+from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import check_web_password
+from yk_portal.authentication.sessions import Client, start_session
 from yk_portal.portal_settings import service as portal_settings
 from yk_portal.yubikeys.models import YubikeyCredential
 
@@ -358,3 +360,134 @@ def test_actions_by_a_signed_in_admin_record_the_admin(make_user):
     audit = AuditEvent.objects.get()
     assert audit.actor_user_id == admin.pk
     assert audit.actor_username_snapshot == "boss"
+
+
+# Usernames (spec §23) and hard delete (spec §26)
+
+
+def test_change_username(actor, make_user, make_credential):
+    user = make_user("alice")
+    key = make_credential(user)
+    services.change_username(user, " Alicia ", actor)
+    assert User.objects.get(pk=user.pk).username == user.username == "alicia"
+    assert YubikeyCredential.objects.get(pk=key.pk).user == user  # the ID stays
+    audit = AuditEvent.objects.get()
+    assert audit.event_type == EventType.USERNAME_CHANGED
+    assert audit.details == {"old_username": "alice", "new_username": "alicia"}
+    services.change_username(user, "alicia", actor)  # the same name: nothing happens
+    assert AuditEvent.objects.count() == 1
+
+
+@pytest.mark.parametrize(
+    ("username", "code"),
+    [("Bob", "username_taken"), ("svc.radius", "reserved_username"), ("a b", "invalid_username")],
+)
+def test_change_username_checks_the_name(actor, make_user, username, code):
+    user = make_user("alice")
+    make_user("bob")
+    with raises(code):
+        services.change_username(user, username, actor)
+    assert User.objects.get(pk=user.pk).username == "alice"
+    assert not AuditEvent.objects.exists()
+
+
+def test_delete_user(actor, make_user, make_credential):
+    admin = make_user("boss", admin=True)
+    user = make_user("alice", admin=True, email="alice@example.com")
+    keys = sorted(make_credential(user).public_id for _ in range(2))
+    made_by_alice = make_credential(admin, created_by=user)
+    add_member(create_group("noc", actor), user, actor)
+    portal_settings.update({"portal_name": "NOC"}, Actor.for_user(user))
+    start_session(user, Client("127.0.0.1", "pytest"))
+    AuditEvent.objects.all().delete()
+
+    assert services.delete_user(user, Actor.for_user(admin)) == keys
+    assert not User.objects.filter(pk=user.pk).exists()
+    assert not YubikeyCredential.objects.filter(user_id=user.pk).exists()
+    assert not Session.objects.filter(user_id=user.pk).exists()
+    assert YubikeyCredential.objects.get(pk=made_by_alice.pk).created_by is None
+    # The audit log keeps the former ID and username, never the email address (spec §26).
+    audit = AuditEvent.objects.get()
+    assert audit.event_type == EventType.ACCOUNT_DELETED
+    assert (audit.target_user_id, audit.target_username_snapshot) == (user.pk, "alice")
+    assert audit.details == {"state": A, "public_ids": keys}
+    assert "alice@example.com" not in str(audit.details)
+
+
+@pytest.mark.parametrize("state", [P, A, L])
+def test_the_last_enabled_admin_cant_be_deleted(actor, make_user, state):
+    admin = make_user(state=state, admin=True)
+    with raises("last_admin"):
+        services.delete_user(admin, actor)
+    assert User.objects.filter(pk=admin.pk).exists()
+    make_user(admin=True)
+    services.delete_user(admin, actor)
+    assert not User.objects.filter(pk=admin.pk).exists()
+
+
+def test_a_disabled_admin_can_be_deleted(actor, make_user):
+    make_user(admin=True)
+    disabled = make_user(state=D, admin=True)
+    services.delete_user(disabled, actor)
+    assert not User.objects.filter(pk=disabled.pk).exists()
+
+
+# Display name and comment, for admins (addendum §16.9)
+
+
+def test_create_user_with_display_name_and_comment(actor):
+    account = services.create_user(
+        "alice", actor, display_name=" Smith, Alice ", comment="Contractor\r\nuntil March"
+    )
+    user = User.objects.get(pk=account.user.pk)
+    assert (user.display_name, user.comment) == ("Smith, Alice", "Contractor\nuntil March")
+    details = AuditEvent.objects.get().details
+    assert "Smith" not in str(details) and "Contractor" not in str(details)
+
+
+def test_update_account(actor, make_user):
+    user = make_user("alice")
+    services.update_account(
+        user, actor, email="alice@example.com", display_name="Alice Smith", comment="VIP"
+    )
+    user.refresh_from_db()
+    assert (user.email, user.display_name, user.comment) == (
+        "alice@example.com",
+        "Alice Smith",
+        "VIP",
+    )
+    # One event, naming the fields changed, never their values (spec §26).
+    audit = AuditEvent.objects.get()
+    assert audit.event_type == EventType.ACCOUNT_UPDATED
+    assert audit.details == {"changed": ["email", "display_name", "comment"]}
+
+    services.update_account(user, actor, display_name="Alice Smith", comment=None)
+    assert AuditEvent.objects.count() == 1  # unchanged, and None leaves a field as it is
+    services.update_account(user, actor, comment="")
+    assert User.objects.get(pk=user.pk).comment == ""
+    assert AuditEvent.objects.order_by("-timestamp")[0].details == {"changed": ["comment"]}
+
+
+@pytest.mark.parametrize(
+    ("fields", "code"),
+    [
+        ({"display_name": "x" * 256}, "display_name_too_long"),
+        ({"display_name": "Alice\nSmith"}, "display_name_control_character"),
+        ({"comment": "x" * 1001}, "comment_too_long"),
+        ({"comment": "bell\x07"}, "comment_control_character"),
+        ({"email": "not-an-address"}, "invalid"),
+    ],
+)
+def test_update_account_checks_the_values(actor, make_user, fields, code):
+    user = make_user("alice")
+    with raises(code):
+        services.update_account(user, actor, **fields)
+    assert not AuditEvent.objects.exists()
+
+
+def test_comments_count_line_breaks_as_one(actor, make_user):
+    user = make_user("alice")
+    services.update_account(
+        user, actor, comment="\r\n".join(["x" * 99] * 10), display_name="x" * 255
+    )
+    assert len(User.objects.get(pk=user.pk).comment) == 999

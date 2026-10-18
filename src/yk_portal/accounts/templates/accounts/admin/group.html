@@ -1,0 +1,46 @@
+{% extends "web/base.html" %}
+{% block title %}{{ group.name }} · {% endblock %}
+{% block content %}
+<p><a href="{% url 'admin-groups' %}">Groups</a></p>
+<div class="heading-row">
+  <h1>{{ group.name }}{% if is_default %} <span class="tag">default</span>{% endif %}</h1>
+  <span class="button-row">
+    <a class="button" href="{% url 'admin-group-edit' group.pk %}">Edit</a>
+    <a class="button danger" href="{% url 'admin-group-delete' group.pk %}">Delete</a>
+  </span>
+</div>
+{% if group.description %}<p>{{ group.description|linebreaksbr }}</p>{% endif %}
+<section class="panel" aria-labelledby="members-heading">
+  <h2 id="members-heading">Members</h2>
+  <form class="filters" method="post" action="{% url 'admin-group-member-add' group.pk %}" novalidate>
+    {% csrf_token %}
+    <label class="visually-hidden" for="{{ form.username.id_for_label }}">{{ form.username.label }}</label>
+    {{ form.username }}
+    <button type="submit">Add</button>
+    {% for message in form.username.errors %}<p class="field-error">{{ message }}</p>{% endfor %}
+  </form>
+  <div class="table-wrap">
+  <table class="list">
+    <thead>
+      <tr><th scope="col">Username</th><th scope="col">State</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr>
+    </thead>
+    <tbody>
+      {% for member in members %}
+      <tr>
+        <td><a href="{% url 'admin-user' member.pk %}">{{ member.username }}</a>{% if member.display_name %} <span class="muted">{{ member.display_name }}</span>{% endif %}</td>
+        <td><span class="state state-{{ member.state|lower }}">{{ member.get_state_display }}</span></td>
+        <td class="actions">
+          <form method="post" action="{% url 'admin-group-member-remove' group.pk member.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="link">Remove from the group</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="3">No members.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

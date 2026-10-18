@@ -6,6 +6,7 @@ a message the web pages and the CLI show as it is. Functions that change an
 account refresh the User passed in.
 """
 
+import unicodedata
 from collections.abc import Collection, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -26,6 +27,10 @@ from yk_portal.yubikeys.models import YubikeyCredential
 
 from .models import AccountState, Group, Role, User
 from .validators import validate_username
+
+# The admin-only fields (addendum §16.9).
+DISPLAY_NAME_LENGTH = 255
+COMMENT_LENGTH = 1000
 
 PROVISIONING = AccountState.PROVISIONING
 ACTIVE = AccountState.ACTIVE
@@ -52,6 +57,8 @@ def create_user(
     email: str = "",
     admin: bool = False,
     groups: Iterable[Group] | None = None,
+    display_name: str = "",
+    comment: str = "",
 ) -> NewAccount:
     """Create an account in PROVISIONING with a temporary password (spec §10).
 
@@ -62,14 +69,26 @@ def create_user(
         admin: Whether to add the admin role to the user role.
         groups: The account's groups; None gives the default group, if one is set
             (addendum §5.4).
+        display_name: An optional name, for admins (addendum §16.9).
+        comment: Optional notes, for admins.
 
     Returns:
         The account and its temporary password.
 
     Raises:
-        ValidationError: The username or email address is invalid, or the username is taken.
+        ValidationError: The username, email address, display name or comment is
+            invalid, or the username is taken.
     """
-    return _create(username, actor, email, admin, groups, EventType.ACCOUNT_CREATED)
+    return _create(
+        username,
+        actor,
+        email,
+        admin,
+        groups,
+        EventType.ACCOUNT_CREATED,
+        display_name=display_name,
+        comment=comment,
+    )
 
 
 def bootstrap_admin(username: str, actor: Actor) -> NewAccount:
@@ -120,12 +139,14 @@ def _create(
     admin: bool,
     groups: Iterable[Group] | None,
     event: EventType,
+    display_name: str = "",
+    comment: str = "",
 ) -> NewAccount:
     username = normalize_username(username)
     validate_username(username)
-    email = email.strip()
-    if email:
-        validate_email(email)
+    email = _clean_email(email)
+    display_name = _clean_display_name(display_name)
+    comment = _clean_comment(comment)
     temporary = generate_temporary_password()
     temporary_hash = hash_web_password(temporary)
     roles = [Role.USER, Role.ADMIN] if admin else [Role.USER]
@@ -138,6 +159,8 @@ def _create(
             event,
             {},
             email=email,
+            display_name=display_name,
+            comment=comment,
             temporary_password_hash=temporary_hash,
             temporary_password_expires_at=_temporary_expiry(),
         )
@@ -277,20 +300,90 @@ def set_temporary_password(user: User, actor: Actor) -> str:
 def set_email(user: User, email: str, actor: Actor) -> None:
     """Set the account's email address, informational only (spec §24).
 
-    The audit event names the change, not the address (spec §26).
-
     Raises:
         ValidationError: Not an email address.
     """
-    email = email.strip()
-    if email:
-        validate_email(email)
+    update_account(user, actor, email=email)
+
+
+def update_account(
+    user: User,
+    actor: Actor,
+    *,
+    email: str | None = None,
+    display_name: str | None = None,
+    comment: str | None = None,
+) -> None:
+    """Change an account's email address, display name or comment; None leaves one as it
+    is. Display name and comment are for admins (addendum §16.9).
+
+    One ACCOUNT_UPDATED event names the fields changed, never their values, which are
+    personal data (spec §26).
+
+    Raises:
+        ValidationError: A value is invalid.
+    """
+    cleaners = {
+        "email": (email, _clean_email),
+        "display_name": (display_name, _clean_display_name),
+        "comment": (comment, _clean_comment),
+    }
+    changes = {name: clean(value) for name, (value, clean) in cleaners.items() if value is not None}
     with _account(user) as account:
-        if account.email == email:
+        changed = [name for name, value in changes.items() if getattr(account, name) != value]
+        if not changed:
             return
-        account.email = email
+        for name in changed:
+            setattr(account, name, changes[name])
         account.save()
-        record(EventType.ACCOUNT_UPDATED, actor, account, details={"changed": ["email"]})
+        record(EventType.ACCOUNT_UPDATED, actor, account, details={"changed": changed})
+
+
+def change_username(user: User, username: str, actor: Actor) -> None:
+    """Rename an account (spec §9, §23). Its ID, which everything refers to, stays.
+
+    Radiator gets the new name with the next export, which replaces each of the
+    account's YubiKeys by public ID (addendum §6.4).
+
+    Raises:
+        ValidationError: The username is invalid or taken.
+    """
+    username = normalize_username(username)
+    validate_username(username)
+    with _account(user) as account:
+        if account.username == username:
+            return
+        if User.objects.filter(username=username).exists():
+            raise ValidationError("That username is taken.", code="username_taken")
+        old = account.username
+        account.username = username
+        account.save()
+        record(
+            EventType.USERNAME_CHANGED,
+            actor,
+            account,
+            details={"old_username": old, "new_username": username},
+        )
+
+
+def delete_user(user: User, actor: Actor) -> list[str]:
+    """Hard delete an account (spec §26), unless it is the last enabled admin (spec §9.1).
+
+    Its YubiKeys and their secrets, roles, group memberships and sessions go with it.
+    The audit log keeps its former ID and username. The deletion doesn't reach Radiator
+    (addendum §6.6): an admin runs `yubikey-db.sh delete` there.
+
+    Returns:
+        The public IDs of the YubiKeys deleted.
+    """
+    with transaction.atomic():
+        _keep_an_admin(user)
+        account = User.objects.select_for_update().get(pk=user.pk)
+        public_ids = sorted(_keys(account).values_list("public_id", flat=True))
+        details = {"state": account.state, "public_ids": public_ids}
+        record(EventType.ACCOUNT_DELETED, actor, account, details=details)
+        account.delete()
+    return public_ids
 
 
 def complete_provisioning(user: User, actor: Actor) -> None:
@@ -370,26 +463,14 @@ def _account(
     Args:
         user: The account to change.
         states: The states the change is allowed from; empty for any.
-        keep_an_admin: Refuse if USER is the last enabled admin (spec §9.1). Every
-            enabled admin is locked first, in ID order, so two admins changing each
-            other at once queue instead of both passing the check or deadlocking.
+        keep_an_admin: Refuse if USER is the last enabled admin (_keep_an_admin).
 
     Yields:
         A fresh copy of the account to change; USER is refreshed afterwards.
     """
     with transaction.atomic():
         if keep_an_admin:
-            admins = list(
-                enabled_admins()
-                .select_for_update(of=("self",))
-                .order_by("pk")
-                .values_list("pk", flat=True)
-            )
-            if admins == [user.pk]:
-                raise ValidationError(
-                    "This is the last enabled admin account; make another admin first.",
-                    code="last_admin",
-                )
+            _keep_an_admin(user)
         account = User.objects.select_for_update().get(pk=user.pk)
         if states and account.state not in states:
             raise ValidationError(
@@ -397,6 +478,58 @@ def _account(
             )
         yield account
     user.refresh_from_db()
+
+
+def _clean_email(email: str) -> str:
+    email = email.strip()
+    if email:
+        validate_email(email)
+    return email
+
+
+def _clean_display_name(display_name: str) -> str:
+    """One line of plain text, up to 255 characters."""
+    display_name = display_name.strip()
+    if len(display_name) > DISPLAY_NAME_LENGTH:
+        raise ValidationError(
+            f"Use at most {DISPLAY_NAME_LENGTH} characters.", code="display_name_too_long"
+        )
+    if any(unicodedata.category(c) == "Cc" for c in display_name):
+        raise ValidationError(
+            "Use one line, without control characters.", code="display_name_control_character"
+        )
+    return display_name
+
+
+def _clean_comment(comment: str) -> str:
+    """Plain text, line breaks allowed, up to 1,000 characters."""
+    comment = comment.replace("\r\n", "\n").strip()
+    if len(comment) > COMMENT_LENGTH:
+        raise ValidationError(
+            f"Use at most {COMMENT_LENGTH:,} characters.", code="comment_too_long"
+        )
+    if any(unicodedata.category(c) == "Cc" and c not in "\n\t" for c in comment):
+        raise ValidationError(
+            "Don't use control characters other than line breaks and tabs.",
+            code="comment_control_character",
+        )
+    return comment
+
+
+def _keep_an_admin(user: User) -> None:
+    """Refuse if USER is the last enabled admin (spec §9.1). Call it in a transaction.
+
+    Every enabled admin is locked first, in ID order, so two admins changing each
+    other at once queue instead of both passing the check or deadlocking.
+    """
+    admins = list(
+        enabled_admins().select_for_update(of=("self",)).order_by("pk").values_list("pk", flat=True)
+    )
+    if admins == [user.pk]:
+        raise ValidationError(
+            "This is the last enabled admin account; make another admin first.",
+            code="last_admin",
+        )
 
 
 def _keys(account: User) -> QuerySet[YubikeyCredential]:

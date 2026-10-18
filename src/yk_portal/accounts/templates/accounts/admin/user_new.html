@@ -1,0 +1,21 @@
+{% extends "web/base.html" %}
+{% block title %}New account · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>New account</h1>
+  <p>It starts in PROVISIONING, with a temporary password shown on the next page. You can add a YubiKey for it there.</p>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/form_errors.html" %}
+    {% include "web/field.html" with field=form.username %}
+    {% include "web/field.html" with field=form.email %}
+    {% include "web/field.html" with field=form.display_name %}
+    {% include "web/field.html" with field=form.comment %}
+    {% include "web/checkbox.html" with field=form.admin %}
+    {% include "web/checkboxes.html" with field=form.groups %}
+    <button type="submit" class="primary">Create it</button>
+  </form>
+  <p><a href="{% url 'admin-users' %}">Back</a></p>
+</section>
+{% endblock %}

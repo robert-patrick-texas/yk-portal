@@ -1,0 +1,22 @@
+{% extends "web/base.html" %}
+{% block title %}Add a YubiKey for {{ user.username }} · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Add a YubiKey for {{ user.username }}</h1>
+  <p>Enter the values ykman set when you programmed it. {{ user.username }} chooses its PIN: while setting up the account, or later on its page.</p>
+  {% include "yubikeys/ykman.html" %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/form_errors.html" %}
+    {% include "web/field.html" with field=form.public_id %}
+    {% include "web/field.html" with field=form.private_id %}
+    {% include "web/field.html" with field=form.aes_key %}
+    {% include "web/field.html" with field=form.slot %}
+    {% include "web/field.html" with field=form.label %}
+    {% include "web/field.html" with field=form.otp %}
+    <button type="submit" class="primary">Add it</button>
+  </form>
+  <p><a href="{% url 'admin-user' user.pk %}">Back</a></p>
+</section>
+{% endblock %}

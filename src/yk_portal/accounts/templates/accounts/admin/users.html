@@ -1,0 +1,49 @@
+{% extends "web/base.html" %}
+{% block title %}Users · {% endblock %}
+{% block content %}
+<div class="heading-row">
+  <h1>Users</h1>
+  <a class="button" href="{% url 'admin-user-new' %}">New account</a>
+</div>
+<form class="filters" method="get" role="search">
+  <label class="visually-hidden" for="{{ form.q.id_for_label }}">Search</label>
+  {{ form.q }}
+  <label class="visually-hidden" for="{{ form.state.id_for_label }}">State</label>
+  {{ form.state }}
+  <label class="visually-hidden" for="{{ form.role.id_for_label }}">Role</label>
+  {{ form.role }}
+  <label class="visually-hidden" for="{{ form.group.id_for_label }}">Group</label>
+  {{ form.group }}
+  <button type="submit">Filter</button>
+  {% if request.GET %}<a href="{% url 'admin-users' %}">Clear</a>{% endif %}
+</form>
+<p class="muted">{{ page.paginator.count }} account{{ page.paginator.count|pluralize }}</p>
+<div class="table-wrap">
+<table class="list">
+  <thead>
+    <tr><th scope="col">Username</th><th scope="col">Email</th><th scope="col">State</th><th scope="col">Groups</th><th scope="col">YubiKeys</th><th scope="col">Last sign-in</th></tr>
+  </thead>
+  <tbody>
+    {% for user in page %}
+    <tr>
+      <td><a href="{% url 'admin-user' user.pk %}">{{ user.username }}</a>{% if user.has_admin_role %} <span class="tag">admin</span>{% endif %}{% if user.display_name %}<br><span class="muted">{{ user.display_name }}</span>{% endif %}</td>
+      <td>{{ user.email|default:"—" }}</td>
+      <td><span class="state state-{{ user.state|lower }}">{{ user.get_state_display }}</span></td>
+      <td>{% for group in user.groups.all %}{{ group.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
+      <td>{{ user.yubikey_count }}</td>
+      <td>{{ user.last_login_at|date:"Y-m-d H:i"|default:"—" }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="6">No accounts match.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="Pages">
+  {% if page.has_previous %}<a href="{% querystring page=page.previous_page_number %}">Previous</a>{% endif %}
+  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="{% querystring page=page.next_page_number %}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

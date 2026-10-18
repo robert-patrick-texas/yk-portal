@@ -6,7 +6,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from yk_portal.accounts.models import AccountState
 from yk_portal.audit.models import AuditEvent, EventType
 from yk_portal.audit.service import Actor
+from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import PinHashes, check_web_password
+from yk_portal.authentication.sessions import Client, start_session
 from yk_portal.core import sha512_crypt
 from yk_portal.portal_settings import service as portal_settings
 from yk_portal.yubikeys import management
@@ -410,4 +412,48 @@ def test_only_admins_reveal_secrets(user, actor, make_credential, who):
         management.reveal_private_id(credential, reveal_as)
     with pytest.raises(PermissionDenied):
         management.reveal_aes_key(credential, reveal_as)
+    assert not AuditEvent.objects.exists()
+
+
+# Admins set PINs without an OTP (addendum §2.16)
+
+
+def test_admin_set_pin(user, make_user, two_keys):
+    admin = make_user("boss", admin=True)
+    first, second = two_keys
+    users_sessions = [start_session(user, Client("127.0.0.1", "pytest"))[0] for _ in range(2)]
+    admins_session, _ = start_session(admin, Client("127.0.0.1", "pytest"))
+    management.admin_set_pin(second, Actor.for_user(admin), PIN, keep=admins_session)
+    assert check_web_password(PIN, second.pin_hash)
+    assert sha512_crypt.check_hash(PIN, second.radius_pin_hash)
+    first.refresh_from_db()
+    assert first.pin_hash == "argon2$dummy"  # unchanged
+    audit = AuditEvent.objects.get()
+    assert (audit.event_type, audit.actor_username_snapshot) == (EventType.PASSWORD_CHANGED, "boss")
+    assert (audit.target_user_id, audit.details) == (user.pk, {"public_ids": [second.public_id]})
+    # Every session of the owner ends; the owner isn't asked to change the PIN.
+    assert all(Session.objects.get(pk=s.pk).revoked_at for s in users_sessions)
+    assert Session.objects.get(pk=admins_session.pk).revoked_at is None
+
+
+def test_admin_set_pin_everywhere(user, actor, two_keys):
+    management.admin_set_pin(two_keys[0], actor, PIN, everywhere=True)
+    for key in YubikeyCredential.objects.filter(user=user):
+        assert check_web_password(PIN, key.pin_hash)
+
+
+def test_admins_set_their_own_pin_keeping_their_session(user, two_keys):
+    current, _ = start_session(user, Client("127.0.0.1", "pytest"))
+    other, _ = start_session(user, Client("127.0.0.1", "pytest"))
+    management.admin_set_pin(two_keys[0], Actor.for_user(user), PIN, keep=current)
+    assert Session.objects.get(pk=current.pk).revoked_at is None
+    assert Session.objects.get(pk=other.pk).revoked_at is not None
+
+
+def test_admin_set_pin_applies_the_policy(user, actor, two_keys):
+    session, _ = start_session(user, Client("127.0.0.1", "pytest"))
+    with pytest.raises(ValidationError):
+        management.admin_set_pin(two_keys[1], actor, "short")
+    assert not YubikeyCredential.objects.get(pk=two_keys[1].pk).has_pin
+    assert Session.objects.get(pk=session.pk).revoked_at is None
     assert not AuditEvent.objects.exists()

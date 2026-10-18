@@ -1,0 +1,10 @@
+<fieldset class="field choices">
+  <legend>{{ field.label }}</legend>
+  {% for choice in field %}
+  <label for="{{ choice.id_for_label }}">{{ choice.tag }} {{ choice.choice_label }}</label>
+  {% empty %}
+  <p class="muted">None defined.</p>
+  {% endfor %}
+  {% if field.help_text %}<p class="hint">{{ field.help_text }}</p>{% endif %}
+  {% for message in field.errors %}<p class="field-error">{{ message }}</p>{% endfor %}
+</fieldset>

@@ -45,6 +45,10 @@ class User(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=255, unique=True, validators=[validate_username])
     email = models.EmailField(blank=True, default="")
+    # For admins only, both optional: a name in whatever form the site uses (full name,
+    # first name, "last, first"), and notes. Users don't see them; they aren't exported.
+    display_name = models.CharField(max_length=255, blank=True, default="")
+    comment = models.TextField(blank=True, default="")
     # The PINs are on the account's YubiKeys (addendum §2.2); the account has only its
     # temporary password, while it is PROVISIONING.
     temporary_password_hash = models.CharField(max_length=255, blank=True, default="")

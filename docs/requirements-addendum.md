@@ -154,7 +154,9 @@ on its page. Each change records `PASSWORD_CHANGED` with the public IDs.
 
 2.16 An admin can set the PIN of any user's YubiKey, without an OTP from it,
 as root can set any user's password on Linux (the admin pages, spec Phase
-6). It is audited like the user's own change.
+6). It is audited like the user's own change. All of the user's sessions end
+(an admin setting the PIN of their own YubiKey keeps the session they use).
+The user isn't asked to change the PIN at the next sign-in.
 
 ---
 
@@ -498,7 +500,8 @@ Adds to spec §25 and §27.
 
 - `users`: no password hash (the PINs are on the YubiKeys, section 2.2);
   keep `failed_login_count` for failures that name no YubiKey (section
-  2.14); add `theme` (`browser`, `light`, `dark`).
+  2.14); add `theme` (`browser`, `light`, `dark`), and `display_name` and
+  `comment` for admins (section 16.9).
 - `yubikey_credentials`: `slot_number` may be empty for imported keys; add
   `pin_hash` and `radius_pin_hash` (both may be empty: no PIN yet, or an
   imported key, section 2.8), `failed_login_count` (section 2.14), and
@@ -607,3 +610,77 @@ live connector (section 11) carries removals.
 | 2026-10-17 | Admins can set any user's YubiKey PIN, as root can set any user's password | 2.16 |
 | 2026-10-17 | Import report lines are short, such as `skipped: reserved username` | 7.1 |
 | 2026-10-17 | The import's audit event is recorded only when YubiKeys were added; moving counters is routine | 7.1 |
+| 2026-10-17 | A PIN set by an admin ends all the user's sessions; the user isn't asked to change it | 2.16 |
+| 2026-10-18 | Admin pages: role checked at every request, never cached; admins may act on their own account within the last-admin rule | 16.1, 16.2 |
+| 2026-10-18 | Pre-provisioning: optional OTP, no PIN; temporary passwords shown once | 16.4, 16.5 |
+| 2026-10-18 | Hard delete is confirmed by entering the username (typed or pasted) | 16.6 |
+| 2026-10-18 | Each reveal needs its own step-up; one can reveal both values; shown for 60 seconds | 16.7 |
+| 2026-10-18 | Accounts get an optional display name and comment, for admins only | 12, 16.9 |
+
+---
+
+## 16. Admin pages
+
+Adds to spec §9, §10, §14, §20.2, §26 and §34 (spec Phase 6).
+
+16.1 The admin pages are for ACTIVE accounts with the admin role, read at
+every request, so a role taken away applies at the next one (spec §19).
+Other accounts are refused (HTTP 403). No admin page is cached
+(`Cache-Control: no-store`), since they show temporary passwords and YubiKey
+secrets.
+
+16.2 Admins may use the admin pages on their own account. The only limit is
+spec §9.1: the last enabled admin can't be disabled, deleted or lose the
+admin role.
+
+16.3 The user list searches usernames and email addresses, filters by
+state, role and group, and shows 50 accounts a page.
+
+16.4 Creating an account takes the username, an optional email address, the
+admin role and groups, with the default group ticked (section 5.4). The
+temporary password (section 14.1) is shown once, on the page that follows,
+and never again; so is a new one from a reset to provisioning (spec §15) or
+from issuing another to a PROVISIONING account (spec §11).
+
+16.5 Pre-provisioning a YubiKey (spec §14) takes its values, label and slot,
+which may be "not known". An OTP is optional: if the admin has the YubiKey
+at hand, it checks the values and its counters become the stored ones. The
+admin sets no PIN there: the user chooses it (section 2.15), or an admin sets
+it afterwards (section 2.16).
+
+16.6 Hard delete (spec §26) is confirmed by entering the username, typed or
+pasted. The confirmation and the page after it show the `yubikey-db.sh
+delete USER` reminder (section 6.6); removing one YubiKey shows
+`yubikey-db.sh delete USER PUBLIC_ID`. `ACCOUNT_DELETED` keeps the former ID
+and username, the account's state and the public IDs of its YubiKeys, never
+the email address.
+
+16.7 Revealing a private ID or AES key (spec §20.2, §34):
+
+- with the step-up setting on (section 3.2), each reveal needs the admin's
+  PIN and a fresh OTP from one of the admin's YubiKeys, as at sign-in; a
+  failure counts toward the admin's lockout like a failed login (section
+  2.14);
+- one step-up can reveal both values, recorded as two events;
+- the value is only in the response to that request, never in a URL; the
+  page hides it after 60 seconds and when it is left.
+
+16.8 Renaming an account records `USERNAME_CHANGED` with the old and new
+names. Radiator gets the new name with the next export, which replaces the
+account's YubiKeys by public ID (section 6.4).
+
+16.9 Each account has two optional fields for admins, both empty by default
+(spec §10's "display label / comment"):
+
+| Field | Holds | Rule |
+|---|---|---|
+| `display_name` | A name in whatever form the site uses: full name, first name, or "last, first" | One line, up to 255 characters |
+| `comment` | Notes | Up to 1,000 characters; line breaks and tabs allowed |
+
+Admins set them on the create and edit forms. They show on the admin pages
+(the display name also in the user list and a group's members), and the
+user list's search covers the display name. Users don't see them on their
+own pages, and they aren't exported to Radiator. Both are plain text,
+escaped on output, without control characters (beyond the comment's line
+breaks and tabs). A change is an `ACCOUNT_UPDATED` event naming the field,
+never its value, as for the email address (spec §26).

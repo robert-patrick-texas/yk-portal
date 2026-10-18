@@ -1,0 +1,15 @@
+{% extends "web/base.html" %}
+{% block title %}Remove a YubiKey · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Remove {{ credential.user.username }}’s YubiKey <code>{{ credential.public_id }}</code>?</h1>
+  <p>{{ credential.label|default:"This YubiKey" }} is deleted from {{ portal.portal_name }}, with its secrets.{% if last %} It is {{ credential.user.username }}’s only enabled YubiKey: without it they can’t sign in.{% endif %}</p>
+  {% include "accounts/admin/radiator_delete.html" with username=credential.user.username public_id=credential.public_id %}
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="danger">Remove it</button>
+  </form>
+  <p><a href="{% url 'admin-user' credential.user.pk %}">Keep it</a></p>
+</section>
+{% endblock %}

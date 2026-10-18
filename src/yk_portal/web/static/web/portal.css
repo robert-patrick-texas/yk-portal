@@ -227,3 +227,81 @@ button.danger {
   border-radius: 6px;
   cursor: pointer;
 }
+
+/* Admin pages */
+h2 { font-size: 1.125rem; margin: 1.5rem 0 0.75rem; }
+.card h2 { border-top: 1px solid var(--border); padding-top: 1rem; }
+.panel { margin: 2rem 0 0; }
+.panel h2 { margin-top: 0; }
+
+.heading-row { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: baseline; justify-content: space-between; }
+.heading-row h1 { margin-bottom: 0.5rem; }
+
+a.button, .button-row button, .filters button {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.button.danger { color: var(--error); border-color: var(--error); }
+.button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.button-row form { margin: 0; }
+.card .button-row { margin: 0 0 1rem; }
+
+.tag {
+  display: inline-block;
+  padding: 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.state { font-size: 0.875rem; font-weight: 600; white-space: nowrap; }
+h1 .state { font-size: 0.875rem; vertical-align: middle; margin-left: 0.5rem; }
+.state-active { color: var(--text); }
+.state-provisioning, .state-disabled { color: var(--muted); }
+.state-locked { color: var(--error); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0 0 1rem; }
+.filters input, .filters select {
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.filters input[type="search"] { min-width: 14rem; }
+.filters .field-error { flex-basis: 100%; }
+
+.pager { display: flex; gap: 1rem; align-items: baseline; margin: 1rem 0; }
+
+.secret code { font-size: 1.25rem; letter-spacing: 0.05em; }
+code.revealed { font-weight: 600; }
+
+fieldset.choices { border: 0; padding: 0; }
+fieldset.choices legend { font-weight: 600; padding: 0; margin: 0 0 0.25rem; }
+fieldset.choices label { display: flex; align-items: center; gap: 0.5rem; }
+
+.field textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.notice p:first-child { margin-top: 0; }
+.notice pre { margin-bottom: 0; }

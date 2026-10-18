@@ -1,0 +1,10 @@
+{% extends "web/base.html" %}
+{% block title %}Deleted · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Deleted {{ username }}</h1>
+  {% include "accounts/admin/radiator_delete.html" with username=username %}
+  <p><a href="{% url 'admin-users' %}">Users</a></p>
+</section>
+{% endblock %}

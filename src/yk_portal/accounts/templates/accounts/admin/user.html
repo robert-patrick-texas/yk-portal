@@ -1,0 +1,87 @@
+{% extends "web/base.html" %}
+{% block title %}{{ user.username }} · {% endblock %}
+{% block content %}
+<p><a href="{% url 'admin-users' %}">Users</a></p>
+<div class="heading-row">
+  <h1>{{ user.username }} <span class="state state-{{ user.state|lower }}">{{ user.get_state_display }}</span></h1>
+  <a class="button" href="{% url 'admin-user-edit' user.pk %}">Edit</a>
+</div>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<dl class="facts">
+  <dt>Display name</dt><dd>{{ user.display_name|default:"—" }}</dd>
+  <dt>Email</dt><dd>{{ user.email|default:"—" }}</dd>
+  <dt>Roles</dt><dd>user{% if is_admin %}, admin{% endif %}</dd>
+  <dt>Groups</dt><dd>{% for group in user_groups %}<a href="{% url 'admin-group' group.pk %}">{{ group.name }}</a>{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</dd>
+  <dt>Created</dt><dd>{{ user.created_at|date:"Y-m-d H:i" }} UTC</dd>
+  <dt>Last sign-in</dt><dd>{% if user.last_login_at %}{{ user.last_login_at|date:"Y-m-d H:i" }} UTC{% else %}—{% endif %}</dd>
+  {% if user.state == "PROVISIONING" %}
+  <dt>Temporary password</dt><dd>{% if user.temporary_password_expires_at %}expires {{ user.temporary_password_expires_at|date:"Y-m-d H:i" }} UTC{% else %}—{% endif %}</dd>
+  {% endif %}
+  <dt>Failed logins</dt><dd>{{ user.failed_login_count }} not tied to a YubiKey</dd>
+  <dt>Comment</dt><dd>{{ user.comment|default:"—"|linebreaksbr }}</dd>
+</dl>
+
+<section class="panel" aria-labelledby="state-heading">
+  <h2 id="state-heading">Account</h2>
+  <div class="button-row">
+    {% if user.state == "LOCKED" %}
+    <form method="post" action="{% url 'admin-user-unlock' user.pk %}">{% csrf_token %}<button type="submit">Unlock</button></form>
+    {% endif %}
+    {% if user.state == "DISABLED" %}
+    <form method="post" action="{% url 'admin-user-enable' user.pk %}">{% csrf_token %}<button type="submit">Enable</button></form>
+    {% endif %}
+    {% if user.state == "PROVISIONING" %}
+    <form method="post" action="{% url 'admin-user-temporary-password' user.pk %}">{% csrf_token %}<button type="submit">New temporary password</button></form>
+    {% else %}
+    <a class="button" href="{% url 'admin-user-reset' user.pk %}">Reset to provisioning</a>
+    {% endif %}
+    {% if user.state != "DISABLED" %}
+    <form method="post" action="{% url 'admin-user-disable' user.pk %}">{% csrf_token %}<button type="submit">Disable</button></form>
+    {% endif %}
+    {% if is_admin %}
+    <form method="post" action="{% url 'admin-user-revoke-admin' user.pk %}">{% csrf_token %}<button type="submit">Remove the admin role</button></form>
+    {% else %}
+    <form method="post" action="{% url 'admin-user-grant-admin' user.pk %}">{% csrf_token %}<button type="submit">Make admin</button></form>
+    {% endif %}
+    <a class="button danger" href="{% url 'admin-user-delete' user.pk %}">Delete</a>
+  </div>
+</section>
+
+<section class="panel" aria-labelledby="yubikeys-heading">
+  <h2 id="yubikeys-heading">YubiKeys</h2>
+  <div class="table-wrap">
+  <table class="list">
+    <thead>
+      <tr><th scope="col">Label</th><th scope="col">Public ID</th><th scope="col">Slot</th><th scope="col">PIN</th><th scope="col">State</th><th scope="col">Failed logins</th><th scope="col">Added</th><th scope="col">Last used</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr>
+    </thead>
+    <tbody>
+      {% for credential in credentials %}
+      <tr>
+        <td>{{ credential.label|default:"—" }}</td>
+        <td><code>{{ credential.public_id }}</code></td>
+        <td>{{ credential.slot_number|default:"—" }}</td>
+        <td>{% if credential.has_pin %}Set{% else %}Not set{% endif %}</td>
+        <td>{% if credential.enabled %}Enabled{% else %}Disabled{% endif %}</td>
+        <td>{{ credential.failed_login_count }}</td>
+        <td>{{ credential.created_at|date:"Y-m-d" }}<br><span class="muted">{{ credential.get_provisioning_method_display }}</span></td>
+        <td>{{ credential.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
+        <td class="actions">
+          <a href="{% url 'admin-yubikey-edit' user.pk credential.pk %}">Edit</a>
+          <a href="{% url 'admin-yubikey-pin' user.pk credential.pk %}">{% if credential.has_pin %}Change PIN{% else %}Set PIN{% endif %}</a>
+          <a href="{% url 'admin-yubikey-secrets' user.pk credential.pk %}">Secrets</a>
+          <form method="post" action="{% if credential.enabled %}{% url 'admin-yubikey-disable' user.pk credential.pk %}{% else %}{% url 'admin-yubikey-enable' user.pk credential.pk %}{% endif %}">
+            {% csrf_token %}
+            <button type="submit" class="link">{% if credential.enabled %}Disable{% else %}Enable{% endif %}</button>
+          </form>
+          <a href="{% url 'admin-yubikey-remove' user.pk credential.pk %}">Remove</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9">No YubiKeys.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p>{% if can_add %}<a href="{% url 'admin-yubikey-add' user.pk %}">Add a YubiKey</a>{% else %}<span class="muted">This account has the most YubiKeys an account can have.</span>{% endif %}</p>
+</section>
+{% endblock %}

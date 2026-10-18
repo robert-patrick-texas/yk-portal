@@ -1,0 +1,10 @@
+{% extends "web/base.html" %}
+{% block title %}Not found · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Not found</h1>
+  <p>There is nothing here. It may have been deleted.</p>
+  <p><a href="{% url 'home' %}">Your account</a></p>
+</section>
+{% endblock %}

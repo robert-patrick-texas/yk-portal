@@ -1,0 +1,27 @@
+{% extends "web/base.html" %}
+{% block title %}Groups · {% endblock %}
+{% block content %}
+<div class="heading-row">
+  <h1>Groups</h1>
+  <a class="button" href="{% url 'admin-group-new' %}">New group</a>
+</div>
+<p class="muted">Groups grant nothing in {{ portal.portal_name }}, and aren’t exported to Radiator yet.</p>
+<div class="table-wrap">
+<table class="list">
+  <thead>
+    <tr><th scope="col">Name</th><th scope="col">Description</th><th scope="col">Members</th></tr>
+  </thead>
+  <tbody>
+    {% for group in groups %}
+    <tr>
+      <td><a href="{% url 'admin-group' group.pk %}">{{ group.name }}</a>{% if group.pk == default_group %} <span class="tag">default</span>{% endif %}</td>
+      <td>{{ group.description|default:"—" }}</td>
+      <td>{{ group.member_count }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="3">No groups.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

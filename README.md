@@ -11,7 +11,7 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 5 done: configuration file, master key,
+**Status:** spec Phases 1 to 6 done: configuration file, master key,
 AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and
 their states, temporary passwords, roles with last-admin protection, groups,
 the database-backed settings and audit events, and the `bootstrap-admin`,
@@ -21,7 +21,11 @@ lockout counted per YubiKey, sessions and themes; onboarding (email, then
 adding a YubiKey and its PIN, or testing one an admin set up and choosing
 its PIN), and each user's YubiKey pages (add, test, edit, set the PIN,
 disable, remove); the export to radiator-yubikey and the import and counter
-sync from it. The admin pages come next.
+sync from it; the admin pages (users: list and search, create, edit with a
+display name and comment for admins, disable, enable, unlock, reset to
+provisioning, temporary passwords, the admin role, hard delete; any account's YubiKeys: pre-provision, edit, set
+the PIN, disable, remove, reveal the secrets after a step-up; groups;
+settings). The audit viewer comes next.
 
 ## Documents
 
@@ -134,9 +138,9 @@ sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal 
 |---|---|
 | `src/yk_portal/settings/` | Django settings: `base`, `dev`, `test`, `production` |
 | `src/yk_portal/core/` | Configuration, master key, AES-256-GCM encryption, SHA-512 crypt |
-| `src/yk_portal/accounts/` | Users, roles, account states, groups |
+| `src/yk_portal/accounts/` | Users, roles, account states, groups; onboarding and the admin user and group pages |
 | `src/yk_portal/authentication/` | Login, PINs and temporary passwords, lockout, sessions, step-up |
-| `src/yk_portal/yubikeys/` | YubiKey credentials, OTP validation, replay counters |
+| `src/yk_portal/yubikeys/` | YubiKey credentials, OTP validation, replay counters; the users' and admins' YubiKey pages |
 | `src/yk_portal/audit/` | Audit events |
 | `src/yk_portal/portal_settings/` | The admin settings page and run-time settings |
 | `src/yk_portal/radiator/` | Export to and import from radiator-yubikey |

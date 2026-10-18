@@ -36,9 +36,9 @@ class PortalSettings:
 
 
 # Plain text, escaped on output (addendum §3.4): (minimum, maximum) length.
-_TEXT = {"portal_name": (1, 64), "login_notice": (0, 2000)}
+TEXT_LENGTHS = {"portal_name": (1, 64), "login_notice": (0, 2000)}
 # Whole numbers: (minimum, maximum).
-_NUMBER = {
+NUMBER_RANGES = {
     "idle_timeout_minutes": (5, 240),
     "max_session_hours": (1, 24),
     "temp_password_hours": (1, 336),
@@ -105,15 +105,15 @@ def update(changes: Mapping[str, object], actor: Actor) -> list[str]:
 
 def _clean(key: str, value: object) -> object:
     """VALUE checked against KEY's rule, as PortalSettings holds it."""
-    if key in _TEXT:
-        low, high = _TEXT[key]
+    if key in TEXT_LENGTHS:
+        low, high = TEXT_LENGTHS[key]
         if not isinstance(value, str) or not low <= len(value) <= high:
             raise ValidationError(
                 f"Use {low} to {high} characters." if low else f"Use at most {high} characters."
             )
         return value
-    if key in _NUMBER:
-        low, high = _NUMBER[key]
+    if key in NUMBER_RANGES:
+        low, high = NUMBER_RANGES[key]
         if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
             raise ValidationError(f"Use a whole number from {low} to {high}.")
         return value

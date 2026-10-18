@@ -1,0 +1,19 @@
+{% extends "web/base.html" %}
+{% block title %}Edit {{ user.username }} · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Edit {{ user.username }}</h1>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/form_errors.html" %}
+    {% include "web/field.html" with field=form.username %}
+    {% include "web/field.html" with field=form.email %}
+    {% include "web/field.html" with field=form.display_name %}
+    {% include "web/field.html" with field=form.comment %}
+    {% include "web/checkboxes.html" with field=form.groups %}
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <p><a href="{% url 'admin-user' user.pk %}">Back</a></p>
+</section>
+{% endblock %}

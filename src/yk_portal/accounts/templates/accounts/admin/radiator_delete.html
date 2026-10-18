@@ -1,0 +1,4 @@
+<div class="notice">
+  <p>Radiator keeps {% if public_id %}this YubiKey{% else %}{{ username }}’s YubiKeys{% endif %}: the export doesn’t carry deletions. Delete {% if public_id %}it{% else %}them{% endif %} there too:</p>
+  <pre><code>sudo /opt/radiator-yubikey/yubikey-db.sh delete {{ username }}{% if public_id %} {{ public_id }}{% endif %}</code></pre>
+</div>

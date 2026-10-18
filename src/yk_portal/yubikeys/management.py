@@ -4,6 +4,7 @@ addendum §2.2, §3.2).
 Each change records an audit event without any secret. A broken rule raises
 ValidationError, as in yk_portal.accounts.services. The pages check that the
 signed-in user may act on the credential; reveal_* check the admin role too.
+Admins act with allow_last=True and set PINs with admin_set_pin.
 """
 
 import re
@@ -18,7 +19,9 @@ from django.utils import timezone
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
+from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import PinHashes, hash_pin, validate_pin
+from yk_portal.authentication.sessions import revoke_sessions
 from yk_portal.portal_settings.service import current as current_settings
 
 from .models import (
@@ -209,6 +212,35 @@ def change_pin(
         user = credential.user
         keys = list(YubikeyCredential.objects.filter(user=user)) if everywhere else [credential]
         set_pin(user, keys, pin, actor)
+    credential.refresh_from_db()
+
+
+def admin_set_pin(
+    credential: YubikeyCredential,
+    actor: Actor,
+    pin: str,
+    everywhere: bool = False,
+    keep: Session | None = None,
+) -> None:
+    """Set a YubiKey's PIN without an OTP from it, as root can set any user's password
+    (addendum §2.16). Audited like the owner's own change.
+
+    Every session of the owner ends, but KEEP, the session making the change: it
+    matters only when admins set the PIN of their own YubiKey. The owner isn't asked
+    to change the PIN at the next sign-in.
+
+    Args:
+        everywhere: Set it on all the owner's YubiKeys, not only this one.
+        keep: The admin's session.
+
+    Raises:
+        ValidationError: The PIN breaks the policy.
+    """
+    user = credential.user
+    keys = list(YubikeyCredential.objects.filter(user=user)) if everywhere else [credential]
+    with transaction.atomic():
+        set_pin(user, keys, pin, actor)
+        revoke_sessions(user, keep=keep)
     credential.refresh_from_db()
 
 

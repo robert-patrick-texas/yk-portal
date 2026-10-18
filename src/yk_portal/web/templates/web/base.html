@@ -6,6 +6,7 @@
   <title>{% block title %}{% endblock %}{{ portal.portal_name }}</title>
   <link rel="stylesheet" href="{% static 'web/portal.css' %}">
   <script src="{% static 'web/reveal.js' %}" defer></script>
+  {% block scripts %}{% endblock %}
 </head>
 <body>
   <header class="bar">
@@ -14,6 +15,11 @@
     <nav class="nav" aria-label="Main">
       <a href="{% url 'home' %}">Account</a>
       <a href="{% url 'yubikeys' %}">YubiKeys</a>
+      {% if account.is_admin %}
+      <a href="{% url 'admin-users' %}">Users</a>
+      <a href="{% url 'admin-groups' %}">Groups</a>
+      <a href="{% url 'admin-settings' %}">Settings</a>
+      {% endif %}
     </nav>
     {% endif %}
     <div class="bar-end">

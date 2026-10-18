@@ -1,0 +1,19 @@
+{% extends "web/base.html" %}
+{% block title %}Delete {{ group.name }} · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Delete the group {{ group.name }}?</h1>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if is_default %}
+  <p>This is the default group. Choose another default, or none, in <a href="{% url 'admin-settings' %}">Settings</a> first.</p>
+  {% else %}
+  <p>{% if member_count %}Its {{ member_count }} member{{ member_count|pluralize }} lose{{ member_count|pluralize:"s," }} the group; their accounts stay.{% else %}It has no members.{% endif %}</p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="danger">Delete it</button>
+  </form>
+  {% endif %}
+  <p><a href="{% url 'admin-group' group.pk %}">Keep it</a></p>
+</section>
+{% endblock %}

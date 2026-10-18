@@ -1,0 +1,20 @@
+{% extends "web/base.html" %}
+{% block title %}Reset {{ user.username }} · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Reset {{ user.username }} to provisioning?</h1>
+  <p>For a lost or replaced YubiKey, or to set the account up again:</p>
+  <ul>
+    <li>it gets a new temporary password, shown on the next page;</li>
+    <li>its sessions end;</li>
+    <li>{% if enabled %}its {{ enabled }} enabled YubiKey{{ enabled|pluralize }} {{ enabled|pluralize:"is,are" }} disabled, not deleted;{% else %}it has no enabled YubiKey;{% endif %}</li>
+    <li>{{ user.username }} signs in with the temporary password and sets up a YubiKey again.</li>
+  </ul>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="danger">Reset it</button>
+  </form>
+  <p><a href="{% url 'admin-user' user.pk %}">Cancel</a></p>
+</section>
+{% endblock %}

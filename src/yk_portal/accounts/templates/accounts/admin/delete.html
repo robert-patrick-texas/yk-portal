@@ -1,0 +1,17 @@
+{% extends "web/base.html" %}
+{% block title %}Delete {{ user.username }} · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Delete {{ user.username }}?</h1>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <p>The account is deleted from {{ portal.portal_name }} for good, with {% if public_ids %}its YubiKeys ({% for public_id in public_ids %}<code>{{ public_id }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}) and their secrets, {% endif %}its group memberships and its sessions. The audit log keeps its username.{% if is_self %} This is your own account: you are signed out.{% endif %}</p>
+  {% include "accounts/admin/radiator_delete.html" with username=user.username %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/field.html" with field=form.username %}
+    <button type="submit" class="danger">Delete it</button>
+  </form>
+  <p><a href="{% url 'admin-user' user.pk %}">Keep it</a></p>
+</section>
+{% endblock %}

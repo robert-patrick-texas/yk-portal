@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from django import forms
 from django.core.exceptions import ValidationError
 
@@ -63,8 +65,8 @@ class PinForm(forms.Form):
         return data
 
 
-class YubikeyForm(PinForm):
-    """A YubiKey's values as ykman set them, its label, slot and PIN, and a test OTP."""
+class KeyForm(forms.Form):
+    """A YubiKey's values as ykman set them, its label and slot."""
 
     public_id = forms.CharField(
         label="Public ID",
@@ -78,7 +80,6 @@ class YubikeyForm(PinForm):
         max_length=255, required=False, help_text="Optional, such as “spare” or “on my keyring”."
     )
     slot = forms.TypedChoiceField(choices=SLOTS, coerce=int, label="Slot", initial=2)
-    otp = _otp_field()
 
     def clean_public_id(self) -> str:
         value = self.cleaned_data["public_id"].strip().lower()
@@ -119,6 +120,29 @@ class YubikeyForm(PinForm):
         self.add_error(fields.get(error.error_list[0].code or "", None), error)
 
 
+class YubikeyForm(KeyForm, PinForm):
+    """A user's own YubiKey: its values, its PIN and a test OTP."""
+
+    otp = _otp_field()
+
+
+class AdminYubikeyForm(KeyForm):
+    """A YubiKey an admin pre-provisions (spec §14): no proof of possession, and no PIN,
+    which its owner chooses (addendum §2.15). An OTP checks the values if the admin has
+    the YubiKey at hand."""
+
+    slot = forms.TypedChoiceField(
+        choices=[("", "Not known"), *SLOTS], coerce=int, empty_value=None, required=False
+    )
+    otp = forms.CharField(
+        label="OTP (optional)",
+        max_length=64,
+        required=False,
+        widget=forms.TextInput(attrs={"autocomplete": "off", "spellcheck": "false"}),
+        help_text="If you have the YubiKey: click here, then touch it, to check the values.",
+    )
+
+
 class OtpForm(forms.Form):
     otp = _otp_field()
 
@@ -134,6 +158,27 @@ class ChangePinForm(PinForm):
 
     otp = _otp_field()
     everywhere = forms.BooleanField(required=False, label="Use this PIN on all my YubiKeys")
+
+
+class AdminPinForm(PinForm):
+    """A YubiKey's new PIN, set by an admin without an OTP (addendum §2.16)."""
+
+    everywhere = forms.BooleanField(required=False)
+
+    def __init__(self, data: Mapping[str, object] | None = None, *, owner: str) -> None:
+        super().__init__(data)
+        self.fields["everywhere"].label = f"Use this PIN on all of {owner}’s YubiKeys"
+
+
+class StepUpForm(forms.Form):
+    """The signed-in admin's PIN and OTP again, before a secret is shown (spec §20.2)."""
+
+    passcode = forms.CharField(
+        label="Your PIN, then touch your YubiKey",
+        max_length=256,
+        strip=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "off", "data-reveal": True}),
+    )
 
 
 class YubikeyEditForm(forms.Form):

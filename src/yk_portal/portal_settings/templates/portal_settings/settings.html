@@ -1,0 +1,27 @@
+{% extends "web/base.html" %}
+{% block title %}Settings · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Settings</h1>
+  {% if saved %}<p class="success" role="status">Saved.</p>{% endif %}
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/form_errors.html" %}
+    <h2>Name and sign-in page</h2>
+    {% include "web/field.html" with field=form.portal_name %}
+    {% include "web/field.html" with field=form.login_notice %}
+    {% include "web/field.html" with field=form.default_theme %}
+    <h2>Sessions and sign-in</h2>
+    {% include "web/field.html" with field=form.idle_timeout_minutes %}
+    {% include "web/field.html" with field=form.max_session_hours %}
+    {% include "web/field.html" with field=form.failed_login_limit %}
+    {% include "web/field.html" with field=form.temp_password_hours %}
+    <h2>Accounts and YubiKeys</h2>
+    {% include "web/field.html" with field=form.default_group %}
+    {% include "web/field.html" with field=form.max_yubikeys_per_user %}
+    {% include "web/checkbox.html" with field=form.step_up_before_reveal %}
+    <button type="submit" class="primary">Save</button>
+  </form>
+</section>
+{% endblock %}

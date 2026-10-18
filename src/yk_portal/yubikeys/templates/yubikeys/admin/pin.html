@@ -1,0 +1,18 @@
+{% extends "web/base.html" %}
+{% block title %}PIN · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>PIN of {{ credential.user.username }}’s YubiKey <code>{{ credential.public_id }}</code></h1>
+  <p>{{ credential.label|default:"This YubiKey" }} {% if credential.has_pin %}has a PIN{% else %}has no PIN yet{% endif %}. Setting one needs no OTP. All of {{ credential.user.username }}’s sessions end; tell them the new PIN privately.</p>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/form_errors.html" %}
+    {% include "web/field.html" with field=form.pin %}
+    {% include "web/field.html" with field=form.confirm %}
+    {% include "web/checkbox.html" with field=form.everywhere %}
+    <button type="submit" class="primary">Save the PIN</button>
+  </form>
+  <p><a href="{% url 'admin-user' credential.user.pk %}">Back</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "web/base.html" %}
+{% block title %}{% if group %}Edit {{ group.name }}{% else %}New group{% endif %} · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{% if group %}Edit {{ group.name }}{% else %}New group{% endif %}</h1>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "web/form_errors.html" %}
+    {% include "web/field.html" with field=form.name %}
+    {% include "web/field.html" with field=form.description %}
+    <button type="submit" class="primary">{% if group %}Save{% else %}Create it{% endif %}</button>
+  </form>
+  <p><a href="{% if group %}{% url 'admin-group' group.pk %}{% else %}{% url 'admin-groups' %}{% endif %}">Back</a></p>
+</section>
+{% endblock %}
