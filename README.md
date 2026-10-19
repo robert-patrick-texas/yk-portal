@@ -43,6 +43,15 @@ installation and its deployment guide, and a lab in Docker.
 | [docs/deployment.md](docs/deployment.md) | Installing, configuring, running, checking, upgrading and going back |
 | [lab/README.md](lab/README.md) | The lab: yk-portal in Docker behind the host's nginx, for trying changes |
 
+GitHub Pages publishes these documents as a website, built from the Markdown
+by `scripts/build_pages.py` on each push to `main`
+(`.github/workflows/pages.yml`). To see the site before pushing:
+
+```bash
+uv run --only-group pages scripts/build_pages.py   # into _site/; a broken link stops it
+uv run --only-group pages python -m http.server -d _site   # http://localhost:8000/
+```
+
 ## Requirements
 
 - Ubuntu 26.04 LTS
@@ -239,3 +248,4 @@ A backup restores into either backend. To move from SQLite to PostgreSQL:
 | `lab/` | The Docker lab |
 | `tests/` | Tests (pytest with pytest-django), run on both backends |
 | `scripts/check` | Every check, and the tests on SQLite and PostgreSQL |
+| `scripts/build_pages.py`, `.github/workflows/pages.yml` | The documents as a website, on GitHub Pages |

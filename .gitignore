@@ -3,6 +3,8 @@ __pycache__/
 *.py[oc]
 build/
 dist/
+# The documents' site, made by scripts/build_pages.py
+_site/
 wheels/
 *.egg-info
 .venv/

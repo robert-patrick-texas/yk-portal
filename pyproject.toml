@@ -29,11 +29,16 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    { include-group = "pages" },
     "django-stubs>=5.2,<5.3",
     "pytest>=9.1.1",
     "pytest-django>=4.14.0",
     "ruff>=0.17.1",
     "ty>=0.0.88",
+]
+pages = [
+    "markdown-it-py>=4.2.0",
+    "mdit-py-plugins>=0.6.1",
 ]
 
 [tool.uv]
