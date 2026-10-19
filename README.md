@@ -1,5 +1,7 @@
 # yk-portal
 
+[Documents](#documents) ([web version](https://robert-patrick-texas.github.io/yk-portal/)) · [Deployment guide](docs/deployment.md) · [MIT license](LICENSE)
+
 A self-hosted web portal where network operations staff sign in with a
 YubiKey's PIN and its OTP, and where admins manage user accounts, groups and
 YubiKey OTP credentials. Accounts and keys are stored in SQLite (the default)
@@ -43,8 +45,9 @@ installation and its deployment guide, and a lab in Docker.
 | [docs/deployment.md](docs/deployment.md) | Installing, configuring, running, checking, upgrading and going back |
 | [lab/README.md](lab/README.md) | The lab: yk-portal in Docker behind the host's nginx, for trying changes |
 
-GitHub Pages publishes these documents as a website, built from the Markdown
-by `scripts/build_pages.py` on each push to `main`
+GitHub Pages publishes these documents as a website, the
+[web version](https://robert-patrick-texas.github.io/yk-portal/), built from
+the Markdown by `scripts/build_pages.py` on each push to `main`
 (`.github/workflows/pages.yml`). To see the site before pushing:
 
 ```bash

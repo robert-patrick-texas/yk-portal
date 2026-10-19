@@ -125,3 +125,39 @@ def test_only_an_earlier_build_is_replaced(tmp_path):
 )
 def test_page_paths(source, page):
     assert build_pages.page_path(source) == page
+
+
+def test_every_page_has_the_index_and_the_repository_link(tmp_path):
+    """An index of the documents, the page shown expanded to its sections, and at the
+    top a link to the repository."""
+    sources = write(
+        tmp_path,
+        {
+            "README.md": "# Project\n\n## Start\n\n### Detail\n\n#### Too deep\n",
+            "docs/spec.md": "# The spec\n\n## Subtitle\n\n# 1. One\n\n## 1.1 Sub\n\n### Deeper\n",
+        },
+    )
+    build_pages.build(tmp_path, sources, tmp_path / "site", REPO)
+    home = (tmp_path / "site" / "index.html").read_text()
+    spec = (tmp_path / "site" / "docs" / "spec.html").read_text()
+    for page in (home, spec):
+        header = page.split("</header>")[0]
+        assert f'<a class="repository" href="{REPO}">example/project on GitHub</a>' in header
+        assert '<a class="contents" href="#index">Contents</a>' in header
+    index = home.split('<nav id="index"')[1].split("</nav>")[0]
+    assert '<a href="index.html" aria-current="page">Project</a>' in index
+    assert '<a href="docs/spec.html">The spec</a>' in index
+    # The top level of the sections and the level below; the title isn't one.
+    assert re.findall(r'class="depth-(\d)"><a href="#([^"]+)"', index) == [
+        ("0", "start"),
+        ("1", "detail"),
+    ]
+    index = spec.split('<nav id="index"')[1].split("</nav>")[0]
+    assert '<a href="../index.html">Project</a>' in index
+    assert '<a href="../docs/spec.html" aria-current="page">The spec</a>' in index
+    # A document whose sections are level-1 headings: those, and the level-2 ones.
+    assert re.findall(r'class="depth-(\d)"><a href="#([^"]+)"', index) == [
+        ("1", "subtitle"),
+        ("0", "1-one"),
+        ("1", "11-sub"),
+    ]

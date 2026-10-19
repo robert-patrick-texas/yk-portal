@@ -7,8 +7,10 @@ directory, that directory's index.html), any other NAME.md is NAME.html.
 Links between documents point to their pages, links to other files of the
 repository to the files on GitHub, and a link to a file or heading that
 doesn't exist stops the build: the site has no broken links. Raw HTML in the
-Markdown is shown as text. The pages have no scripts, and a
-Content-Security-Policy that allows only the site's own stylesheet.
+Markdown is shown as text. Each page links to the repository at the top, and
+has an index on the left (below the page on narrow screens) of the
+documents, with the sections of the one shown. The pages have no scripts, and
+a Content-Security-Policy that allows only the site's own stylesheet.
 
 .github/workflows/pages.yml runs it and publishes OUTPUT on each push to main.
 """
@@ -49,10 +51,33 @@ body {
   font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 a { color: var(--link); }
-header, main, footer { max-width: 52rem; margin: 0 auto; padding: 0 1rem; }
-header { padding-top: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
-header a { color: var(--text); font-weight: 600; text-decoration: none; }
-main { padding-top: 1rem; padding-bottom: 2rem; }
+header {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; align-items: baseline;
+  padding: 0.75rem 1rem; border-bottom: 1px solid var(--border);
+}
+header .site { margin-right: auto; color: var(--text); font-weight: 600; text-decoration: none; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); max-width: 78rem; margin: 0 auto; }
+main { max-width: 52rem; padding: 1rem 1rem 2rem; }
+/* The index: below the page on narrow screens, reached by the header's Contents link. */
+nav.index { order: 2; padding: 1rem; border-top: 1px solid var(--border); font-size: 0.875rem; }
+nav.index ul { list-style: none; margin: 0; padding: 0; }
+nav.index li { margin: 0.2rem 0; }
+nav.index a { color: var(--text); text-decoration: none; }
+nav.index a:hover { text-decoration: underline; }
+nav.index a[aria-current="page"] { font-weight: 600; }
+nav.index .sections {
+  margin: 0.3rem 0 0.6rem 0.25rem; padding-left: 0.75rem; border-left: 2px solid var(--border);
+}
+nav.index .sections a { color: var(--muted); }
+nav.index .sections .depth-1 { padding-left: 0.85rem; }
+@media (min-width: 60rem) {
+  .layout { grid-template-columns: 17rem minmax(0, 1fr); }
+  nav.index {
+    order: 0; position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto;
+    border-top: 0; border-right: 1px solid var(--border);
+  }
+  header .contents { display: none; }
+}
 h1, h2, h3 { line-height: 1.25; }
 h1 { font-size: 2rem; }
 h2 { padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
@@ -71,8 +96,10 @@ blockquote {
   margin: 1rem 0; padding: 0 1rem; color: var(--muted); border-left: 0.25rem solid var(--border);
 }
 hr { border: 0; border-top: 1px solid var(--border); margin: 1.5rem 0; }
-footer { padding-bottom: 2rem; color: var(--muted); font-size: 0.875rem; }
-footer ul { padding-left: 1.25rem; }
+footer {
+  max-width: 78rem; margin: 0 auto; padding: 1rem; color: var(--muted); font-size: 0.875rem;
+  border-top: 1px solid var(--border);
+}
 """
 
 PAGE = """\
@@ -87,13 +114,19 @@ base-uri 'none'; form-action 'none'">
 <link rel="stylesheet" href="{root}style.css">
 </head>
 <body>
-<header><a href="{root}index.html">{site}</a></header>
+<header>
+<a class="site" href="{root}index.html">{site}</a>
+<a class="contents" href="#index">Contents</a>
+<a class="repository" href="{repo_url}">{repo_name} on GitHub</a>
+</header>
+<div class="layout">
+<nav id="index" class="index" aria-label="Documents">
+{index}</nav>
 <main>
 {body}</main>
+</div>
 <footer>
-<p>From <a href="{source}">{path}</a>. Documents:</p>
-<ul>
-{documents}</ul>
+<p>From <a href="{source}">{path}</a>, in <a href="{repo_url}">{repo_name}</a>.</p>
 </footer>
 </body>
 </html>
@@ -110,6 +143,8 @@ class Page:
     tokens: list[Token]
     title: str
     ids: set[str] = field(default_factory=set)
+    # Every heading but the title: (level, ID, text).
+    sections: list[tuple[int, str, str]] = field(default_factory=list)
 
     @property
     def output(self) -> str:
@@ -149,8 +184,13 @@ def build(
     pages = {}
     for source in sorted(sources, key=lambda s: (page_path(s) != "index.html", s)):
         tokens = md.parse((root / source).read_text(encoding="utf-8"))
-        ids = {t.attrs["id"] for t in tokens if t.type == "heading_open" and "id" in t.attrs}
-        pages[source] = Page(source, tokens, _title(tokens) or source, {str(i) for i in ids})
+        headings = _headings(tokens)
+        # The first level-1 heading is the title; every other heading is a section.
+        first = next((i for i, (level, _, _) in enumerate(headings) if level == 1), None)
+        title = headings[first][2] if first is not None else source
+        sections = [h for i, h in enumerate(headings) if i != first]
+        ids = {ident for _, ident, _ in headings}
+        pages[source] = Page(source, tokens, title, ids, sections)
     errors = []
     for page in pages.values():
         for token in _links(page.tokens):
@@ -166,19 +206,17 @@ def build(
     site = next(iter(pages.values())).title if pages else "Documents"
     for page in pages.values():
         up = "../" * page.output.count("/")
-        documents = "".join(
-            f'<li><a href="{up}{html.escape(p.output)}">{html.escape(p.title)}</a></li>\n'
-            for p in pages.values()
-        )
         title = page.title if page.output == "index.html" else f"{page.title} · {site}"
         text = PAGE.format(
             title=html.escape(title),
             root=up,
             site=html.escape(site),
+            index=_index(pages.values(), page, up),
             body=md.renderer.render(page.tokens, md.options, {}),
             source=html.escape(f"{repo_url}/blob/{ref}/{page.source}"),
             path=html.escape(page.source),
-            documents=documents,
+            repo_url=html.escape(repo_url),
+            repo_name=html.escape(urlsplit(repo_url).path.strip("/") or repo_url),
         )
         target = output / page.output
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -188,12 +226,42 @@ def build(
     return [page.output for page in pages.values()]
 
 
-def _title(tokens: list[Token]) -> str:
-    """The text of the first level-1 heading."""
+def _headings(tokens: list[Token]) -> list[tuple[int, str, str]]:
+    """Each heading's level, ID and text, the text without its Markdown."""
+    headings = []
     for i, token in enumerate(tokens):
-        if token.type == "heading_open" and token.tag == "h1":
-            return tokens[i + 1].content
-    return ""
+        if token.type == "heading_open":
+            text = "".join(
+                child.content
+                for child in tokens[i + 1].children or []
+                if child.type in ("text", "code_inline")
+            )
+            headings.append((int(token.tag[1]), str(token.attrs.get("id", "")), text))
+    return headings
+
+
+def _index(pages, current: Page, up: str) -> str:
+    """Every document, and under the one shown, its sections: the top level of its
+    headings and the level below."""
+    items = []
+    for page in pages:
+        href = html.escape(up + page.output)
+        if page is not current:
+            items.append(f'<li><a href="{href}">{html.escape(page.title)}</a></li>\n')
+            continue
+        items.append(f'<li><a href="{href}" aria-current="page">{html.escape(page.title)}</a>\n')
+        if page.sections:
+            top = min(level for level, _, _ in page.sections)
+            items.append('<ul class="sections">\n')
+            items.extend(
+                f'<li class="depth-{max(level - top, 0)}">'
+                f'<a href="#{html.escape(ident)}">{html.escape(text)}</a></li>\n'
+                for level, ident, text in page.sections
+                if level <= top + 1
+            )
+            items.append("</ul>\n")
+        items.append("</li>\n")
+    return '<ul class="pages">\n' + "".join(items) + "</ul>\n"
 
 
 def _links(tokens: list[Token]):
