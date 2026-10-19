@@ -187,8 +187,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
 table.list { width: 100%; border-collapse: collapse; background: var(--surface); }
 table.list th, table.list td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 table.list th { font-size: 0.875rem; color: var(--muted); font-weight: 600; }
+/* A div inside a table's cell, never the cell: a flex cell isn't a table cell, so it
+   doesn't take its row's height and its border lines up with no other. */
 .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: baseline; }
 .actions form { margin: 0; }
+/* Beside links, a button that looks like one is their size (Sign out stays small). */
+.actions button.link { font-size: inherit; }
 .actions-row { display: flex; gap: 1.5rem; }
 
 button.danger {

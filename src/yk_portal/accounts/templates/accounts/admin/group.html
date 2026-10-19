@@ -29,11 +29,13 @@
       <tr>
         <td><a href="{% url 'admin-user' member.pk %}">{{ member.username }}</a>{% if member.display_name %} <span class="muted">{{ member.display_name }}</span>{% endif %}</td>
         <td><span class="state state-{{ member.state|lower }}">{{ member.get_state_display }}</span></td>
-        <td class="actions">
-          <form method="post" action="{% url 'admin-group-member-remove' group.pk member.pk %}">
-            {% csrf_token %}
-            <button type="submit" class="link">Remove from the group</button>
-          </form>
+        <td>
+          <div class="actions">
+            <form method="post" action="{% url 'admin-group-member-remove' group.pk member.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="link">Remove from the group</button>
+            </form>
+          </div>
         </td>
       </tr>
       {% empty %}

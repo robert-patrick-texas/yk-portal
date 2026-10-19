@@ -221,6 +221,13 @@ def test_templates_have_no_inline_scripts_or_styles():
         assert not inline.search(template.read_text()), template
 
 
+def test_no_table_cell_is_laid_out_as_flex():
+    """A flex cell isn't a table cell: it doesn't take its row's height, so its border
+    doesn't line up with the row's (the actions go in a div inside the cell)."""
+    for template in SRC.glob("*/templates/**/*.html"):
+        assert not re.search(r'<t[dh][^>]*class="[^"]*\bactions\b', template.read_text()), template
+
+
 def test_pages_load_the_show_hide_script(client, db):
     html = client.get(reverse("login")).content.decode()
     assert '<script src="/static/web/reveal.js" defer></script>' in html

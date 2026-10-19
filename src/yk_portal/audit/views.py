@@ -26,15 +26,15 @@ PAGE_SIZE = 50
 def events(request: PortalRequest) -> HttpResponse:
     form = EventFilterForm(request.GET)
     found = AuditEvent.objects.all()
-    account = None
+    # Not "account": every page's layout reads that as the signed-in account.
+    filtered_account = None
     if form.is_valid():
         found = _filter(found, form.cleaned_data)
         if form.cleaned_data["user"]:
-            account = _account(form.cleaned_data["user"])
+            filtered_account = _account(form.cleaned_data["user"])
     page = Paginator(found.order_by("-timestamp"), PAGE_SIZE).get_page(request.GET.get("page"))
-    return render(
-        request, "audit/admin/events.html", {"form": form, "page": page, "account": account}
-    )
+    context = {"form": form, "page": page, "filtered_account": filtered_account}
+    return render(request, "audit/admin/events.html", context)
 
 
 @admin_required

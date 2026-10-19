@@ -4,8 +4,8 @@
 <div class="heading-row">
   <h1>Audit log</h1>
 </div>
-{% if account %}
-<p>Events of {% if account.exists %}<a href="{% url 'admin-user' account.id %}">{{ account.username }}</a>{% else %}{{ account.username }} <span class="tag">deleted</span>{% endif %}, as the actor or the target. <a href="{% url 'admin-audit' %}">All events</a></p>
+{% if filtered_account %}
+<p>Events of {% if filtered_account.exists %}<a href="{% url 'admin-user' filtered_account.id %}">{{ filtered_account.username }}</a>{% else %}{{ filtered_account.username }} <span class="tag">deleted</span>{% endif %}, as the actor or the target. <a href="{% url 'admin-audit' %}">All events</a></p>
 {% endif %}
 <form class="filters" method="get" role="search" novalidate>
   {{ form.user }}

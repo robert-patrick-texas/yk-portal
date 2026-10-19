@@ -18,14 +18,16 @@
       <td>{% if credential.enabled %}Enabled{% else %}Disabled{% endif %}</td>
       <td>{{ credential.created_at|date:"Y-m-d" }}<br><span class="muted">{{ credential.get_provisioning_method_display }}</span></td>
       <td>{{ credential.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
-      <td class="actions">
-        <a href="{% url 'yubikey-edit' credential.pk %}">Edit</a>
-        <a href="{% url 'yubikey-pin' credential.pk %}">{% if credential.has_pin %}Change PIN{% else %}Set PIN{% endif %}</a>
-        <form method="post" action="{% if credential.enabled %}{% url 'yubikey-disable' credential.pk %}{% else %}{% url 'yubikey-enable' credential.pk %}{% endif %}">
-          {% csrf_token %}
-          <button type="submit" class="link">{% if credential.enabled %}Disable{% else %}Enable{% endif %}</button>
-        </form>
-        <a href="{% url 'yubikey-remove' credential.pk %}">Remove</a>
+      <td>
+        <div class="actions">
+          <a href="{% url 'yubikey-edit' credential.pk %}">Edit</a>
+          <a href="{% url 'yubikey-pin' credential.pk %}">{% if credential.has_pin %}Change PIN{% else %}Set PIN{% endif %}</a>
+          <form method="post" action="{% if credential.enabled %}{% url 'yubikey-disable' credential.pk %}{% else %}{% url 'yubikey-enable' credential.pk %}{% endif %}">
+            {% csrf_token %}
+            <button type="submit" class="link">{% if credential.enabled %}Disable{% else %}Enable{% endif %}</button>
+          </form>
+          <a href="{% url 'yubikey-remove' credential.pk %}">Remove</a>
+        </div>
       </td>
     </tr>
     {% empty %}

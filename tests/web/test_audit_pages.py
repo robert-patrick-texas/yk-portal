@@ -244,3 +244,27 @@ def test_an_events_page_after_the_target_is_deleted(client, root, make_user):
 
 def test_an_unknown_event_is_not_found(client, root):
     assert client.get(reverse("admin-audit-event", args=[uuid.uuid4()])).status_code == 404
+
+
+# The page layout
+
+
+@pytest.mark.parametrize("filtered", [None, "bob", "deleted"])
+def test_the_menu_and_the_signed_in_admin_are_shown(client, root, make_user, actor, filtered):
+    """The pages have the menu bar, and the admin's own name by Sign out, also when the
+    log is filtered by another account."""
+    bob = make_user("bob")
+    record(EventType.ACCOUNT_CREATED, actor, bob)
+    query = {}
+    if filtered == "bob":
+        query = {"user": str(bob.pk)}
+    elif filtered == "deleted":
+        query = {"user": str(uuid.uuid4())}
+    html = page(client.get(reverse("admin-audit"), query))
+    if filtered == "bob":
+        assert "Events of <a href" in html
+    event = AuditEvent.objects.get(event_type=EventType.ACCOUNT_CREATED)
+    for shown in (html, page(client.get(reverse("admin-audit-event", args=[event.pk])))):
+        assert '<nav class="nav" aria-label="Main">' in shown
+        assert f'<a href="{reverse("admin-users")}">Users</a>' in shown
+        assert '<span class="who">root</span>' in shown
