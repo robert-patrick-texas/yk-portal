@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# The lab container's start (lab/README.md), as the deployment guide sets up a
+# server: the configuration, the master key the first time, the migrations,
+# then yk-portal serve as the yk-portal account. lab/lab passes:
+#
+#   YK_LAB_PUBLIC_BASE_URL  public_base_url, such as https://www.example.com/yk
+#   YK_LAB_TRUSTED_PROXY    the address the host's proxy connects from
+#   YK_LAB_POSTGRES_DSN     for PostgreSQL: postgres_dsn (else SQLite)
+#   YK_LAB_PGPASS           for PostgreSQL: the passfile's line
+set -euo pipefail
+
+: "${YK_LAB_PUBLIC_BASE_URL:?}" "${YK_LAB_TRUSTED_PROXY:?}"
+etc=/etc/yk-portal
+
+# As systemd starts it: the service account and its environment (HOME, PATH).
+as_service() { setpriv --reuid=yk-portal --regid=yk-portal --init-groups --reset-env -- "$@"; }
+
+if [ -n "${YK_LAB_POSTGRES_DSN:-}" ]; then
+    install -m 0600 -o yk-portal -g yk-portal /dev/null $etc/pgpass
+    printf '%s\n' "${YK_LAB_PGPASS:?}" > $etc/pgpass
+    database="backend = \"postgresql\"
+postgres_dsn = \"$YK_LAB_POSTGRES_DSN passfile=$etc/pgpass\""
+else
+    database='backend = "sqlite"'
+fi
+
+install -m 0640 -o root -g yk-portal /dev/null $etc/config.toml
+cat > $etc/config.toml << EOF
+# Written by lab/entrypoint at each start.
+[application]
+# In the container: only the published port, on the host's 127.0.0.1, reaches it.
+listen_address = "0.0.0.0"
+listen_port = 8000
+workers = 2
+public_base_url = "$YK_LAB_PUBLIC_BASE_URL"
+
+[database]
+$database
+
+[proxy]
+trusted_proxy_addresses = ["$YK_LAB_TRUSTED_PROXY"]
+
+[logging]
+level = "INFO"
+EOF
+
+if [ ! -e $etc/master.key ]; then
+    yk-portal master-key-create > /dev/null
+    chown yk-portal:yk-portal $etc/master.key
+fi
+
+# PostgreSQL may still be starting.
+tries=30
+until as_service yk-portal migrate -v 0; do
+    tries=$((tries - 1))
+    [ "$tries" -gt 0 ] || exit 1
+    sleep 1
+done
+exec setpriv --reuid=yk-portal --regid=yk-portal --init-groups --reset-env -- yk-portal serve

@@ -492,6 +492,8 @@ def settings_form(**changes: object) -> dict[str, object]:
         "max_session_hours": 12,
         "temp_password_hours": 72,
         "failed_login_limit": 3,
+        "address_failure_limit": 10,
+        "address_wait_minutes": 15,
         "max_yubikeys_per_user": 10,
         "step_up_before_reveal": "on",
         "default_group": "",

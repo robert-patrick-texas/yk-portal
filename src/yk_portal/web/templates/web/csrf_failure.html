@@ -1,0 +1,11 @@
+{% extends "web/base.html" %}
+{% block title %}Form not accepted · {% endblock %}
+{% block main_class %}narrow{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Form not accepted</h1>
+  <p>The form was open too long, or it didn’t come from this portal. Nothing was changed.</p>
+  <p>Go back, reload the page and try again.</p>
+  <p><a href="{% url 'home' %}">Your account</a></p>
+</section>
+{% endblock %}

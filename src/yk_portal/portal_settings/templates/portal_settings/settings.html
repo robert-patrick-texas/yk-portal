@@ -16,6 +16,8 @@
     {% include "web/field.html" with field=form.idle_timeout_minutes %}
     {% include "web/field.html" with field=form.max_session_hours %}
     {% include "web/field.html" with field=form.failed_login_limit %}
+    {% include "web/field.html" with field=form.address_failure_limit %}
+    {% include "web/field.html" with field=form.address_wait_minutes %}
     {% include "web/field.html" with field=form.temp_password_hours %}
     <h2>Accounts and YubiKeys</h2>
     {% include "web/field.html" with field=form.default_group %}

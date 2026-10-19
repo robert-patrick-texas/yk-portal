@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Install or upgrade yk-portal from this source tree (docs/deployment.md).
+#
+#   sudo deploy/install [--postgresql-c] [--no-systemd]
+#
+# Creates the yk-portal service account and its directories, installs this
+# version into a directory of its own, /opt/yk-portal/releases/VERSION-TIME,
+# with uv (the locked dependencies, no development tools, the system's
+# Python), points /opt/yk-portal/current and /usr/local/bin/yk-portal at it,
+# and installs the systemd unit. It never changes the configuration, the
+# master key or the database, and never starts, stops or restarts the
+# service: the deployment guide says when. The running service keeps the
+# release it started with. Run it again to repair an installation; earlier
+# releases stay, for going back.
+#
+#   --postgresql-c  build psycopg's C implementation, for PostgreSQL (needs
+#                   build-essential, python3-dev and libpq-dev)
+#   --no-systemd    don't install the systemd unit (containers)
+set -euo pipefail
+
+APP=yk-portal
+PREFIX=/opt/yk-portal
+PYTHON=${PYTHON:-/usr/bin/python3}
+
+usage() { sed -n '4p' "$0" | sed 's/^#  *//'; }
+die() { echo "deploy/install: $*" >&2; exit 1; }
+
+extras=()
+systemd=yes
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --postgresql-c) extras+=(--extra postgresql-c) ;;
+        --no-systemd) systemd=no ;;
+        -h | --help) echo "usage: $(usage)"; exit 0 ;;
+        *) echo "usage: $(usage)" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+[ "$(id -u)" -eq 0 ] || die "run it as root (sudo)"
+# The code must be readable by the service account, whatever root's umask.
+umask 022
+command -v uv > /dev/null || die "uv isn't installed (docs/deployment.md, \"Prerequisites\")"
+[ -x "$PYTHON" ] || die "$PYTHON not found; install python3, or set PYTHON"
+source=$(cd "$(dirname "$0")/.." && pwd)
+[ -f "$source/pyproject.toml" ] && [ -f "$source/uv.lock" ] || die "$source isn't a yk-portal source tree"
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$source/pyproject.toml" | head -n 1)
+[ -n "$version" ] || die "no version in $source/pyproject.toml"
+# Never one that exists: it may be the one running.
+release=$PREFIX/releases/$version-$(date -u +%Y%m%dT%H%M%SZ)
+[ ! -e "$release" ] || die "$release exists; try again in a second"
+
+# The service account, with no login and no home of its own but its data.
+if ! getent group "$APP" > /dev/null; then
+    groupadd --system "$APP"
+fi
+if ! getent passwd "$APP" > /dev/null; then
+    useradd --system --gid "$APP" --home-dir /var/lib/$APP --no-create-home \
+        --shell /usr/sbin/nologin --comment "yk-portal service" "$APP"
+fi
+
+# Directories (spec §49): the configuration readable by the service, its data
+# private to it, the code root's alone.
+install -d -m 0750 -o root -g "$APP" /etc/$APP
+install -d -m 0700 -o "$APP" -g "$APP" /var/lib/$APP /var/backups/$APP
+install -d -m 0755 -o root -g root "$PREFIX" "$PREFIX/releases"
+
+echo "Installing yk-portal $version into $release"
+# A release that fails to install isn't left behind.
+trap '[ -n "${switched:-}" ] || rm -rf "$release"' EXIT
+UV_PROJECT_ENVIRONMENT=$release uv sync --project "$source" --locked --no-dev \
+    --no-editable --reinstall-package "$APP" --compile-bytecode \
+    --python "$PYTHON" --no-python-downloads ${extras[@]+"${extras[@]}"} --quiet
+chmod -R go-w "$release"
+
+# Switched in one step: a command run meanwhile uses one release or the other.
+previous=$(readlink "$PREFIX/current" 2> /dev/null || true)
+ln -sfn "releases/${release##*/}" "$PREFIX/current.new"
+mv -Tf "$PREFIX/current.new" "$PREFIX/current"
+switched=yes
+ln -sfn "$PREFIX/current/bin/$APP" /usr/local/bin/$APP
+
+if [ "$systemd" = yes ] && [ -d /run/systemd/system ]; then
+    install -m 0644 -o root -g root "$source/deploy/$APP.service" /etc/systemd/system/$APP.service
+    systemctl daemon-reload
+    unit="installed"
+else
+    unit="not installed"
+fi
+
+if [ ! -e /etc/$APP/config.toml ]; then
+    install -m 0640 -o root -g "$APP" "$source/config.example.toml" /etc/$APP/config.toml
+    config="/etc/$APP/config.toml created from config.example.toml: edit it"
+else
+    config="/etc/$APP/config.toml kept"
+fi
+
+echo "yk-portal $version installed: $PREFIX/current -> releases/${release##*/}" \
+    "(was: ${previous:-none}); systemd unit $unit; $config."
+case "$previous" in
+    "") ;;
+    "releases/$version-"*)
+        echo "The same version: sudo systemctl restart yk-portal, to run this copy." ;;
+    *)
+        echo "Upgrading: sudo systemctl stop yk-portal; sudo -u yk-portal yk-portal migrate;" \
+            "sudo systemctl start yk-portal (docs/deployment.md, \"Upgrade\")." ;;
+esac

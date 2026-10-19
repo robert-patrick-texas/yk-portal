@@ -21,3 +21,6 @@ wheels/
 # exports). Test fixtures with test keys only go in tests/fixtures/.
 *.csv
 !tests/fixtures/*.csv
+
+# The lab's settings on this machine (lab/lab.env.example): never committed.
+lab/lab.env

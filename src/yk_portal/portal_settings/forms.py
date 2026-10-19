@@ -14,6 +14,11 @@ _NUMBERS = {
     "max_session_hours": ("Maximum session length", "hours"),
     "temp_password_hours": ("Temporary password lifetime", "hours"),
     "failed_login_limit": ("Failed logins before an account locks", "failed logins"),
+    "address_failure_limit": (
+        "Failed sign-ins from one address before it must wait",
+        "failed sign-ins within the wait",
+    ),
+    "address_wait_minutes": ("Wait for an address with too many failed sign-ins", "minutes"),
     "max_yubikeys_per_user": ("Maximum YubiKeys per user", "YubiKeys"),
 }
 
@@ -44,6 +49,8 @@ class SettingsForm(forms.Form):
     max_session_hours = _number_field("max_session_hours")
     temp_password_hours = _number_field("temp_password_hours")
     failed_login_limit = _number_field("failed_login_limit")
+    address_failure_limit = _number_field("address_failure_limit")
+    address_wait_minutes = _number_field("address_wait_minutes")
     max_yubikeys_per_user = _number_field("max_yubikeys_per_user")
     step_up_before_reveal = forms.BooleanField(
         required=False,

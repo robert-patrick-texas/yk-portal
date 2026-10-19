@@ -17,6 +17,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
+from django.urls import get_script_prefix
 from django.utils import timezone
 
 from yk_portal.accounts.models import AccountState, User
@@ -56,9 +57,9 @@ def client_ip(request: HttpRequest) -> str | None:
     """The client's address: REMOTE_ADDR, or behind a trusted proxy, X-Forwarded-For.
 
     X-Forwarded-For is read from the right, skipping trusted proxies, so a client
-    can't choose its address by sending the header itself.
+    can't choose its address by sending the header itself. A trusted proxy's own
+    address means the proxy didn't say who its client is.
     """
-    trusted = settings.YK_TRUSTED_PROXIES
     hops = [request.META.get("REMOTE_ADDR", "")]
     hops += reversed(request.META.get("HTTP_X_FORWARDED_FOR", "").split(","))
     address = None
@@ -67,9 +68,21 @@ def client_ip(request: HttpRequest) -> str | None:
             address = ipaddress.ip_address(hop.strip())
         except ValueError:
             break
-        if not any(address in network for network in trusted):
+        if not _trusted(address):
             break
     return str(address) if address else None
+
+
+def is_trusted_proxy(address: str) -> bool:
+    """Whether ADDRESS is one of the trusted proxies' ([proxy] trusted_proxy_addresses)."""
+    try:
+        return _trusted(ipaddress.ip_address(address))
+    except ValueError:
+        return False
+
+
+def _trusted(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(address in network for network in settings.YK_TRUSTED_PROXIES)
 
 
 def start_session(user: User, client: Client) -> tuple[Session, str]:
@@ -144,8 +157,15 @@ def request_actor(request: PortalRequest) -> Actor:
 
 
 def set_session_cookie(response: HttpResponse, token: str) -> None:
-    """A browser-session cookie: script can't read it, and it goes only over HTTPS."""
-    response.set_cookie(COOKIE, token, secure=True, httponly=True, samesite="Strict")
+    """A browser-session cookie: script can't read it, it goes only over HTTPS, and only
+    to yk-portal's pages, also when published under a path (public_base_url)."""
+    response.set_cookie(
+        COOKIE, token, path=get_script_prefix(), secure=True, httponly=True, samesite="Strict"
+    )
+
+
+def delete_session_cookie(response: HttpResponse) -> None:
+    response.delete_cookie(COOKIE, path=get_script_prefix(), samesite="Strict")
 
 
 class SessionMiddleware:
@@ -162,7 +182,7 @@ class SessionMiddleware:
         request.account = session.user if session else None
         response = self.get_response(request)
         if token and session is None and COOKIE not in response.cookies:
-            response.delete_cookie(COOKIE, samesite="Strict")
+            delete_session_cookie(response)
         return response
 
 

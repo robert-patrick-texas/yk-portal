@@ -9,6 +9,7 @@ never silently ignored.
 
 import ipaddress
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,9 @@ class ConfigError(Exception):
 class ApplicationConfig:
     listen_address: str
     listen_port: int
+    # https://HOST[:PORT][/PATH], without a trailing "/".
     public_base_url: str
+    workers: int = 4
 
     @property
     def public_host(self) -> str:
@@ -43,6 +46,19 @@ class ApplicationConfig:
         """scheme://host[:port], for CSRF_TRUSTED_ORIGINS."""
         url = urlsplit(self.public_base_url)
         return f"{url.scheme}://{url.netloc}"
+
+    @property
+    def public_path(self) -> str:
+        """The path yk-portal is published under, such as "/yk", or "" at the site's root."""
+        return urlsplit(self.public_base_url).path
+
+    @property
+    def bind(self) -> str:
+        """listen_address:listen_port, an IPv6 address in brackets, for the application
+        server."""
+        address = self.listen_address
+        host = f"[{address}]" if ":" in address else address
+        return f"{host}:{self.listen_port}"
 
 
 @dataclass(frozen=True)
@@ -148,6 +164,7 @@ def load_config(path: Path | None = None) -> Config:
         listen_address=_ip_address(app, "listen_address", "127.0.0.1"),
         listen_port=_port(app, "listen_port", 8000),
         public_base_url=_public_base_url(app, "public_base_url"),
+        workers=_workers(app, "workers", 4),
     )
     app.finish()
 
@@ -194,6 +211,17 @@ def _port(section: _Section, key: str, default: int) -> int:
     return value
 
 
+def _workers(section: _Section, key: str, default: int) -> int:
+    value = section.get_int(key, default)
+    if not 1 <= value <= 32:
+        raise section.error(key, "must be between 1 and 32")
+    return value
+
+
+# A path to publish yk-portal under, such as /yk or /tools/yk: plain segments only.
+_PUBLIC_PATH = re.compile(r"(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*")
+
+
 def _public_base_url(section: _Section, key: str) -> str:
     value = section.get_str(key)
     try:
@@ -203,9 +231,12 @@ def _public_base_url(section: _Section, key: str) -> str:
         raise section.error(key, "is not a valid URL") from None
     if url.scheme != "https" or not url.hostname:
         raise section.error(key, "must be an https:// URL with a host name")
-    if url.path not in ("", "/") or url.query or url.fragment or url.username:
-        raise section.error(key, "must be https://HOST or https://HOST:PORT, with nothing after")
-    return f"https://{url.netloc}"
+    path = url.path.rstrip("/")
+    if not _PUBLIC_PATH.fullmatch(path) or url.query or url.fragment or url.username:
+        raise section.error(
+            key, "must be https://HOST[:PORT] or https://HOST[:PORT]/PATH, with nothing after"
+        )
+    return f"https://{url.netloc}{path}"
 
 
 def _database(section: _Section) -> DatabaseConfig:

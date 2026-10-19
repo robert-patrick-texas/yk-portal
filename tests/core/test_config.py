@@ -32,6 +32,9 @@ def test_minimal_file_gets_defaults(tmp_path):
     assert config.application.listen_address == "127.0.0.1"
     assert config.application.listen_port == 8000
     assert config.application.public_base_url == "https://yk.example.com"
+    assert config.application.public_path == ""
+    assert config.application.workers == 4
+    assert config.application.bind == "127.0.0.1:8000"
     assert config.database.backend == "sqlite"
     assert config.database.sqlite_path == Path("/var/lib/yk-portal/yk-portal.sqlite3")
     assert config.master_key_path == Path("/etc/yk-portal/master.key")
@@ -50,6 +53,7 @@ def test_full_sqlite_file(tmp_path):
         listen_address = "::1"
         listen_port = 8443
         public_base_url = "https://yk.example.com:8443/"
+        workers = 2
 
         [database]
         backend = "sqlite"
@@ -69,6 +73,8 @@ def test_full_sqlite_file(tmp_path):
     assert config.application.public_base_url == "https://yk.example.com:8443"
     assert config.application.public_host == "yk.example.com"
     assert config.application.public_origin == "https://yk.example.com:8443"
+    assert config.application.workers == 2
+    assert config.application.bind == "[::1]:8443"
     assert config.database.sqlite_path == Path("/srv/yk/db.sqlite3")
     assert config.master_key_path == Path("/srv/yk/master.key")
     assert config.trusted_proxy_addresses[0] == ipaddress.ip_network("10.0.0.0/24")
@@ -108,6 +114,26 @@ def test_postgresql_connection_string_may_name_the_application(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("url", "normalized", "path"),
+    [
+        ("https://dev.example.com/yk", "https://dev.example.com/yk", "/yk"),
+        ("https://dev.example.com/yk/", "https://dev.example.com/yk", "/yk"),
+        (
+            "https://dev.example.com:8443/tools/yk-portal",
+            "https://dev.example.com:8443/tools/yk-portal",
+            "/tools/yk-portal",
+        ),
+        ("https://yk.example.com/", "https://yk.example.com", ""),
+    ],
+)
+def test_a_public_base_url_with_a_path(tmp_path, url, normalized, path):
+    """yk-portal can be published under a path of a site (addendum §20.2)."""
+    config = load(tmp_path, f"[application]\npublic_base_url = '{url}'\n")
+    assert config.application.public_base_url == normalized
+    assert config.application.public_path == path
+
+
+@pytest.mark.parametrize(
     ("dsn", "message"),
     [
         ("dbname=yk password=secret", "must not contain a password"),
@@ -131,7 +157,14 @@ def test_postgresql_needs_a_connection_string(tmp_path):
     [
         ("", r"\[application\] public_base_url: required"),
         ("[application]\npublic_base_url = 'http://yk.example.com'", "must be an https:// URL"),
-        ("[application]\npublic_base_url = 'https://yk.example.com/portal'", "nothing after"),
+        ("[application]\npublic_base_url = 'https://yk.example.com/a?b=c'", "nothing after"),
+        ("[application]\npublic_base_url = 'https://yk.example.com/#top'", "nothing after"),
+        ("[application]\npublic_base_url = 'https://me@yk.example.com'", "nothing after"),
+        ("[application]\npublic_base_url = 'https://yk.example.com/a/../b'", "nothing after"),
+        ("[application]\npublic_base_url = 'https://yk.example.com/a//b'", "nothing after"),
+        ("[application]\npublic_base_url = 'https://yk.example.com/y%20k'", "nothing after"),
+        (MINIMAL + "workers = 0", "between 1 and 32"),
+        (MINIMAL + "workers = 33", "between 1 and 32"),
         ("[application]\npublic_base_url = 'https://yk.example.com:99999'", "not a valid URL"),
         (MINIMAL + "listen_address = 'localhost'", "must be an IPv4 or IPv6 address"),
         (MINIMAL + "listen_port = 0", "between 1 and 65535"),

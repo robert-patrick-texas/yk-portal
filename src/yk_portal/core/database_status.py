@@ -109,6 +109,7 @@ def _postgresql(status: Status, connection: Any) -> None:
         local = _is_local(info.host)
         where = f"{info.host}" if info.host.startswith("/") else f"{info.host}:{info.port}"
         status.show("Database", f"{info.dbname} on {where}, as {info.user}")
+        _driver(status, connection)
 
         cursor.execute("SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
         ssl, protocol = cursor.fetchone() or (False, None)
@@ -149,12 +150,24 @@ def _postgresql(status: Status, connection: Any) -> None:
     status.show("Encoding", f"{encoding}, locale {shown} ({provider})")
     if encoding != "UTF8":
         status.problems.append(
-            f"the database's encoding is {encoding}; create it with ENCODING 'UTF8' (README)"
+            f"the database's encoding is {encoding}; "
+            "create it with ENCODING 'UTF8' (deployment guide)"
         )
     elif not _unicode_case(provider, ctype, locale):
         status.warnings.append(
             "the database's locale knows the case of ASCII letters only, so searches don't "
-            "match as on SQLite; create it with LOCALE 'C.UTF-8' (README)"
+            "match as on SQLite; create it with LOCALE 'C.UTF-8' (deployment guide)"
+        )
+
+
+def _driver(status: Status, connection: Any) -> None:
+    """psycopg, and whether it runs its C implementation (addendum §20.6)."""
+    implementation = connection.Database.pq.__impl__
+    status.show("Driver", f"psycopg {connection.Database.__version__} ({implementation})")
+    if implementation == "python":
+        status.warnings.append(
+            "psycopg runs its pure-Python implementation, so backups and restores take about "
+            "1.5 times as long; install yk-portal with --postgresql-c (deployment guide)"
         )
 
 

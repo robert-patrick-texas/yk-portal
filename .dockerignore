@@ -1,0 +1,16 @@
+# The lab image (lab/Dockerfile) gets the source tree, never local state:
+# databases, keys, the environment, caches.
+.git/
+.venv/
+**/__pycache__/
+*.py[oc]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.sqlite3
+*.sqlite3-*
+*.key
+*.csv
+.env
+lab/lab.env

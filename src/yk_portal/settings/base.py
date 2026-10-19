@@ -25,8 +25,12 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # Before the host name is checked (spec §41).
+    "yk_portal.web.middleware.HealthCheckMiddleware",
+    "yk_portal.web.middleware.ForwardedHeadersMiddleware",
+    "yk_portal.web.middleware.SecurityHeadersMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    "yk_portal.web.middleware.ContentSecurityPolicyMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "yk_portal.authentication.sessions.SessionMiddleware",
@@ -62,7 +66,18 @@ USE_I18N = False
 TIME_ZONE = "UTC"
 USE_TZ = True
 
+# Static files are served by the application (WhiteNoise) from the installed package,
+# so the reverse proxy only proxies and no collectstatic step is needed. Browsers may
+# keep them for a minute, so a new version's styles show soon after an upgrade.
 STATIC_URL = "static/"
+WHITENOISE_USE_FINDERS = True
+WHITENOISE_AUTOREFRESH = False
+WHITENOISE_ALLOW_ALL_ORIGINS = False
+
+# Request size limits (spec §33): the largest form, the settings page, is a few KiB.
+# No form takes files.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 256 * 1024
+DATA_UPLOAD_MAX_NUMBER_FILES = 0
 
 # The master key file (spec §22.4); production takes it from the configuration.
 YK_MASTER_KEY_PATH = "/etc/yk-portal/master.key"
@@ -71,7 +86,11 @@ YK_MASTER_KEY_PATH = "/etc/yk-portal/master.key"
 # and the audit log; production takes them from the configuration.
 YK_TRUSTED_PROXIES = (ipaddress.ip_network("127.0.0.1/32"), ipaddress.ip_network("::1/128"))
 
+# Not Django's usual name: under a path of a site, another application's
+# csrftoken cookie would be sent too, and could be the one read.
+CSRF_COOKIE_NAME = "yk_csrftoken"
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = "Strict"
 CSRF_COOKIE_SECURE = True
+CSRF_FAILURE_VIEW = "yk_portal.web.views.csrf_failure"
 X_FRAME_OPTIONS = "DENY"

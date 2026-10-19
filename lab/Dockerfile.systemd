@@ -1,0 +1,13 @@
+# The lab image with systemd as its init, to check deploy/yk-portal.service and
+# its sandbox under systemd (lab/lab systemd-check). Never published.
+FROM yk-portal-lab
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv \
+    && rm -rf /var/lib/apt/lists/* \
+    && install -m 0644 /usr/local/src/yk-portal/deploy/yk-portal.service /etc/systemd/system/ \
+    && systemctl enable yk-portal \
+    && printf '[application]\npublic_base_url = "https://yk-portal.example.com"\n' > /etc/yk-portal/config.toml \
+    && yk-portal master-key-create > /dev/null \
+    && chown yk-portal:yk-portal /etc/yk-portal/master.key \
+    && setpriv --reuid=yk-portal --regid=yk-portal --init-groups --reset-env -- yk-portal migrate -v 0
+ENTRYPOINT ["/sbin/init"]

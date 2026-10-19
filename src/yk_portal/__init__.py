@@ -9,10 +9,19 @@ def main() -> None:
     """Run the yk-portal command: Django's management commands, with production settings.
 
     master-key-create runs before Django starts, because the production settings
-    derive Django's secret key from the master key it creates.
+    derive Django's secret key from the master key it creates. serve starts the
+    application server, which starts Django.
+
+    Every file a command creates is the service account's alone, whatever the umask
+    of the shell or sudo: the SQLite database and its journal, backups, exports.
     """
+    os.umask(0o077)
     if sys.argv[1:2] == ["master-key-create"]:
         sys.exit(master_key_create(sys.argv[2:]))
+    if sys.argv[1:2] == ["serve"]:
+        from .server import serve
+
+        sys.exit(serve(sys.argv[2:]))
     # Stopped by cron, systemd or kill, a command ends as after Ctrl+C: transactions roll
     # back and a file being written, such as a backup, is removed.
     signal.signal(signal.SIGTERM, _terminated)

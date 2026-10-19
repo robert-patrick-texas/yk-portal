@@ -11,7 +11,7 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 8 done: configuration file, master key,
+**Status:** spec Phases 1 to 10 done: configuration file, master key,
 AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and
 their states, temporary passwords, roles with last-admin protection, groups,
 the database-backed settings and audit events, and the `bootstrap-admin`,
@@ -29,7 +29,10 @@ settings); the audit log, whose events can't be changed or deleted, with
 its admin page and its copy in the system journal; PostgreSQL alongside
 SQLite, alike in behavior and schema, with `database-status`; encrypted
 backups, made while yk-portal runs, and their verification and restore, on
-either backend. Production hardening (spec Phase 10) comes next.
+either backend; production hardening: the application server under systemd,
+behind a reverse proxy, on a host name of its own or under a path, a limit on
+failed sign-ins per address, security headers, health checks, the
+installation and its deployment guide, and a lab in Docker.
 
 ## Documents
 
@@ -37,6 +40,8 @@ either backend. Production hardening (spec Phase 10) comes next.
 |---|---|
 | [docs/network_ops_yubikey_otp_tool_planning.md](docs/network_ops_yubikey_otp_tool_planning.md) | The planning and build specification: the functional baseline |
 | [docs/requirements-addendum.md](docs/requirements-addendum.md) | Decisions made since; where it differs from the spec, the addendum wins |
+| [docs/deployment.md](docs/deployment.md) | Installing, configuring, running, checking, upgrading and going back |
+| [lab/README.md](lab/README.md) | The lab: yk-portal in Docker behind the host's nginx, for trying changes |
 
 ## Requirements
 
@@ -86,66 +91,32 @@ uv run python manage.py runserver                   # http://localhost:8000/logi
 The session and CSRF cookies are marked Secure; browsers still send them to
 `localhost` over plain HTTP.
 
-## Production configuration
+To try a change as it will run in production, installed, behind a real
+reverse proxy and over HTTPS, use the lab ([lab/README.md](lab/README.md)):
+`lab/lab up`, then `lab/lab down`.
 
-The installed `yk-portal` command and `yk_portal.wsgi` use the production
-settings, built from `/etc/yk-portal/config.toml` (or the file named by
-`$YK_PORTAL_CONFIG`) and the master key it names:
+## Installation
+
+[docs/deployment.md](docs/deployment.md) is the deployment guide. In short,
+as root, from the release's source tree:
 
 ```bash
-sudo install -m 0640 -o root -g yk-portal config.example.toml /etc/yk-portal/config.toml
-sudoedit /etc/yk-portal/config.toml                    # public_base_url, database
-sudo yk-portal master-key-create                       # mode 0600; back it up safely
+sudo deploy/install                                 # into /opt/yk-portal, with the yk-portal account and the unit
+sudoedit /etc/yk-portal/config.toml                 # public_base_url, database
+sudo yk-portal master-key-create                    # mode 0600; back it up safely
 sudo chown yk-portal:yk-portal /etc/yk-portal/master.key
 sudo -u yk-portal yk-portal migrate
-sudo -u yk-portal yk-portal bootstrap-admin            # the first admin; prints a temporary password
+sudo -u yk-portal yk-portal bootstrap-admin root    # the first admin; prints a temporary password
+sudo systemctl enable --now yk-portal               # yk-portal serve, on 127.0.0.1:8000
 ```
 
-Django's secret key is derived from the master key, so nothing starts
-without it. Packaging, the service account and systemd come in spec Phase 10.
-
-`yk-portal database-status` shows which database is in use and whether it is
-ready; it exits with status 1 if not (addendum §18.6).
-
-### PostgreSQL
-
-SQLite suits a single server. For PostgreSQL (addendum §18.2), give
-yk-portal a role of its own that owns its database and has no other
-privileges, and a UTF-8 database with the `C.UTF-8` locale:
-
-```bash
-sudo -u postgres psql <<'SQL'
-CREATE ROLE yk_portal LOGIN;
-CREATE DATABASE yk_portal OWNER yk_portal
-    ENCODING 'UTF8' LOCALE 'C.UTF-8' TEMPLATE template0;
-REVOKE ALL ON DATABASE yk_portal FROM PUBLIC;
-SQL
-sudo -u postgres psql -c '\password yk_portal'   # prompts, so it stays out of shell history
-```
-
-Put the password in a passfile that only the service account can read, and
-name it in the connection string, with TLS across the network:
-
-```bash
-sudo install -m 0600 -o yk-portal -g yk-portal /dev/null /etc/yk-portal/pgpass
-sudoedit /etc/yk-portal/pgpass   # one line: db.example.com:5432:yk_portal:yk_portal:PASSWORD
-```
-
-```toml
-[database]
-backend = "postgresql"
-postgres_dsn = "host=db.example.com dbname=yk_portal user=yk_portal sslmode=verify-full sslrootcert=/etc/yk-portal/db-ca.crt passfile=/etc/yk-portal/pgpass"
-```
-
-On the same server, peer authentication over the Unix socket needs no
-password: name the role after the service account (`CREATE ROLE "yk-portal"
-LOGIN`, owning the database) and use `postgres_dsn = "dbname=yk_portal
-user=yk-portal"`. Then:
-
-```bash
-sudo -u yk-portal yk-portal migrate
-sudo -u yk-portal yk-portal database-status
-```
+then the reverse proxy (`deploy/nginx/`). The installed `yk-portal` command
+and the service use the production settings, built from
+`/etc/yk-portal/config.toml` (or the file named by `$YK_PORTAL_CONFIG`) and
+the master key it names. Django's secret key is derived from the master key,
+so nothing starts without it. `yk-portal database-status` shows which
+database is in use and whether it is ready; it exits with status 1 if not
+(addendum §18.6).
 
 ## Audit log
 
@@ -170,6 +141,7 @@ audit event naming the operating-system user (and the `sudo` caller).
 
 | Command | What it does |
 |---|---|
+| `serve` | Runs the application server (gunicorn) as configured, until stopped: what `yk-portal.service` runs |
 | `database-status` | Shows the database in use (backend, version, file or server, role, TLS, locale), whether its migrations are applied and its audit log protected; exits with status 1 on a problem. Warnings, such as a role with privileges it doesn't need, don't change the status |
 | `migrate` | Creates or updates the database's tables (spec §36's `database-migrate`) |
 | `bootstrap-admin [USERNAME]` | Creates the first admin account; refused once any admin exists. Prompts for the username if it isn't given |
@@ -244,7 +216,7 @@ sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal 
 ```
 
 A backup restores into either backend. To move from SQLite to PostgreSQL:
-`backup-create` with SQLite configured, set up PostgreSQL (above), change
+`backup-create` with SQLite configured, set up PostgreSQL ([docs/deployment.md](docs/deployment.md#postgresql)), change
 `[database]` in the configuration, then `yk-portal migrate` and
 `backup-restore` into the new, empty database.
 
@@ -261,6 +233,9 @@ A backup restores into either backend. To move from SQLite to PostgreSQL:
 | `src/yk_portal/portal_settings/` | The admin settings page and run-time settings |
 | `src/yk_portal/radiator/` | Export to and import from radiator-yubikey |
 | `src/yk_portal/backup/` | Encrypted backup and restore |
-| `src/yk_portal/web/` | Shared page layout, light and dark themes, static files |
+| `src/yk_portal/web/` | Shared page layout, light and dark themes, static files; health checks, forwarded and security headers |
+| `src/yk_portal/server.py` | `yk-portal serve`: gunicorn, configured from the configuration file |
+| `deploy/` | `install`, the systemd unit, nginx examples |
+| `lab/` | The Docker lab |
 | `tests/` | Tests (pytest with pytest-django), run on both backends |
 | `scripts/check` | Every check, and the tests on SQLite and PostgreSQL |

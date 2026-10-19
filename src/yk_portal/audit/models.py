@@ -26,6 +26,7 @@ class EventType(models.TextChoices):
     LOGIN_SUCCESS = "LOGIN_SUCCESS"
     LOGIN_FAILURE = "LOGIN_FAILURE"
     LOGIN_LOCKED = "LOGIN_LOCKED"
+    LOGIN_THROTTLED = "LOGIN_THROTTLED"
     LOGOUT = "LOGOUT"
     ACCESS_DENIED = "ACCESS_DENIED"
     ACCOUNT_CREATED = "ACCOUNT_CREATED"
@@ -104,6 +105,8 @@ class AuditEvent(models.Model):
             models.Index(fields=["event_type"], name="audit_events_event_type"),
             models.Index(fields=["actor_user_id"], name="audit_events_actor"),
             models.Index(fields=["target_user_id"], name="audit_events_target"),
+            # Failed sign-ins by address, for the per-address limit (addendum §20.4).
+            models.Index(fields=["source_ip", "timestamp"], name="audit_events_source_ip"),
         ]
 
     def __str__(self) -> str:

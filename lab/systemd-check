@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Inside the systemd lab container (lab/lab systemd-check): yk-portal.service,
+# started by systemd with its whole sandbox, serves a sign-in, writes its
+# database and its audit events, and scores as systemd-analyze security says.
+set -euo pipefail
+
+fail() { echo "FAILED: $*" >&2; journalctl -u yk-portal --no-pager -o cat | tail -20 >&2; exit 1; }
+as_service() { setpriv --reuid=yk-portal --regid=yk-portal --init-groups --reset-env -- "$@"; }
+
+for _ in $(seq 30); do
+    systemctl is-active --quiet yk-portal 2> /dev/null && curl -fs http://127.0.0.1:8000/health/ready > /dev/null && break
+    sleep 1
+done
+systemctl is-active --quiet yk-portal || fail "yk-portal.service isn't active"
+echo "yk-portal.service: $(systemctl show -p StatusText --value yk-portal)"
+echo "health: $(curl -fsS http://127.0.0.1:8000/health/ready)"
+
+password=$(as_service yk-portal bootstrap-admin root | sed -n 's/^Temporary password: //p')
+[ -n "$password" ] || fail "bootstrap-admin printed no temporary password"
+# As the reverse proxy sends them. The CSRF cookie is Secure: curl sends it only
+# when told to, over plain HTTP.
+proxied=(-H "Host: yk-portal.example.com" -H "X-Forwarded-Proto: https"
+    -H "X-Forwarded-For: 198.51.100.7" -H "Origin: https://yk-portal.example.com")
+page=$(curl -fsS -D /tmp/headers "${proxied[@]}" http://127.0.0.1:8000/login/)
+cookie=$(grep -io 'yk_csrftoken=[^;]*' /tmp/headers | head -n 1)
+token=$(grep -o 'name="csrfmiddlewaretoken" value="[^"]*"' <<< "$page" | head -n 1 | cut -d'"' -f4)
+sign_in() {
+    curl -s -o /dev/null -w '%{http_code}' -b "$cookie" "${proxied[@]}" \
+        --data-urlencode "csrfmiddlewaretoken=$token" --data-urlencode "username=$1" \
+        --data-urlencode "passcode=$2" http://127.0.0.1:8000/login/
+}
+[ "$(sign_in root "$password")" = 302 ] || fail "the sign-in with the temporary password"
+[ "$(sign_in nobody wrong)" = 200 ] || fail "a failed sign-in"
+echo "sign-ins: accepted and refused, as they should be"
+
+journalctl -t yk-portal-audit --no-pager -o cat | grep -q 'LOGIN_SUCCESS .* ip=198.51.100.7' ||
+    fail "no LOGIN_SUCCESS from 198.51.100.7 in the journal"
+echo "audit journal: LOGIN_SUCCESS and LOGIN_FAILURE from 198.51.100.7"
+if journalctl -u yk-portal --no-pager -o cat | grep -qiE 'traceback|error|denied'; then
+    fail "errors in the service's log"
+fi
+mode=$(stat -c '%a %U:%G' /var/lib/yk-portal/yk-portal.sqlite3)
+[ "$mode" = "600 yk-portal:yk-portal" ] || fail "the database file is $mode"
+echo "database file: $mode"
+systemd-analyze security yk-portal --no-pager | tail -n 1
+
+# A problem that won't pass: systemd tries a few times, then leaves it failed.
+mv /etc/yk-portal/master.key /etc/yk-portal/master.key.away
+systemctl restart yk-portal 2> /dev/null || true
+for _ in $(seq 90); do
+    [ "$(systemctl show -p ActiveState --value yk-portal)" = failed ] && break
+    sleep 1
+done
+[ "$(systemctl show -p ActiveState --value yk-portal)" = failed ] ||
+    fail "without its master key, yk-portal.service didn't end failed"
+journalctl -u yk-portal --no-pager -o cat | grep -q "master.key: not found" ||
+    fail "the journal doesn't say why"
+echo "without its master key: failed after $(systemctl show -p NRestarts --value yk-portal)" \
+    "restarts, the journal says why"

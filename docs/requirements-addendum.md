@@ -179,6 +179,8 @@ database, validated against the ranges below, and every change creates a
 | Maximum session length | 12 hours | 1 to 24 hours |
 | Temporary password lifetime | 72 hours | 1 to 336 hours |
 | Failed logins before an account locks (section 2.14) | 3 | 1 to 10 |
+| Failed sign-ins from one address before it must wait (section 20.4) | 10 | 1 to 100 |
+| Wait for an address with too many failed sign-ins (section 20.4) | 15 minutes | 1 to 1,440 minutes |
 | Maximum YubiKeys per user | 10 | 1 to 10 |
 | Require password + OTP again before revealing a key's private ID or AES key | on | on / off |
 | Default group | none | none, or any group |
@@ -186,7 +188,8 @@ database, validated against the ranges below, and every change creates a
 
 3.3 When changes apply: session settings on each session's next request;
 temporary password lifetime to passwords issued afterwards; failed-login
-limit to the next failed login; maximum YubiKeys to the next key added
+limit to the next failed login; the per-address limit and wait to the next
+sign-in; maximum YubiKeys to the next key added
 (users above a lowered limit keep their keys but can't add more).
 
 3.4 Text settings (portal name, login notice) are plain text, escaped on
@@ -471,9 +474,10 @@ Decides spec §50 items 1 to 4.
 | Encryption | `cryptography`: AES-256-GCM and HKDF for stored secrets and backups, AES-128 for the OTP decrypt |
 | CLI | Django management commands, run as the `yk-portal` command |
 
-To decide when the project is set up: test runner (proposed pytest with
-pytest-django), linting and formatting, and the application server behind
-the reverse proxy (proposed gunicorn under systemd).
+Decided since: tests with pytest and pytest-django; ruff for linting and
+formatting, ty for types; gunicorn as the application server, run by
+`yk-portal serve` under systemd (section 20.1); WhiteNoise for the static
+files (section 20.5).
 
 ---
 
@@ -516,7 +520,7 @@ Adds to spec §25 and §27.
 - Audit events: `SETTING_CHANGED`, `GROUP_CREATED`, `GROUP_UPDATED`,
   `GROUP_DELETED`, `GROUP_MEMBER_ADDED`, `GROUP_MEMBER_REMOVED`,
   `RADIATOR_EXPORT_CREATED`, `RADIATOR_IMPORT_COMPLETED`, `LOGOUT` and
-  `ACCESS_DENIED` (section 17.4).
+  `ACCESS_DENIED` (section 17.4), `LOGIN_THROTTLED` (section 20.4).
 - Encrypted values (spec §25.4's `encrypted_private_id`, `encrypted_aes_secret`
   and their nonces) are each stored as one self-describing value instead of a
   value and a nonce column: version, master key ID, nonce, ciphertext and tag.
@@ -532,7 +536,7 @@ Adds to spec §25 and §27.
 | # | Decision | Default |
 |---|---|---|
 | 1-4 | Language, framework, data access, templates | Decided: section 10 |
-| 5 | Reverse proxy | nginx example; any of the spec's three works |
+| 5 | Reverse proxy | nginx examples, for a host name of its own and for a path of a site (section 20.3); any of the spec's three works |
 | 6 | Primary keys | UUID |
 | 7 | Maximum session length | 12 hours (setting) |
 | 8 | Backup retention | The operator's policy; documented, not enforced |
@@ -635,6 +639,16 @@ live connector (section 11) carries removals.
 | 2026-10-19 | A backup restores only with the same schema and master key; `backup-verify` checks everything a restore checks | 19.4, 19.5 |
 | 2026-10-19 | A restore needs `--replace` for a database with data and `restore` typed (or `--no-input`), and runs in one transaction | 19.6 |
 | 2026-10-19 | A restore never moves OTP counters back, keeps the audit events, and ends every session | 19.7 |
+| 2026-10-19 | psycopg's C implementation is an optional build for PostgreSQL installations (`--postgresql-c`), not a requirement or a bundled binary | 20.6 |
+| 2026-10-19 | A lab: yk-portal in a Docker container, published on the host's 127.0.0.1, reached from the Internet only through the host's nginx, taken down when not in use | 20.11 |
+| 2026-10-19 | yk-portal can be published under a path of a site, such as `https://www.example.com/yk/`, as the user's lab is | 20.2 |
+| 2026-10-19 | `yk-portal serve` runs gunicorn from the configuration file, workers configurable (4), the application loaded before the workers, ready reported to systemd, no access log | 20.1 |
+| 2026-10-19 | `X-Forwarded-Proto` is believed only from the trusted proxies; plain HTTP is redirected to `public_base_url`; HSTS for a year on a host name of its own, with the names under it, not preloaded | 20.3 |
+| 2026-10-19 | Failed sign-ins are limited per address (10 in 15 minutes, settings), counted from the audit log; a waiting address isn't checked, so it can't lock accounts | 20.4 |
+| 2026-10-19 | No page is cached; static files for a minute; requests over 256 KiB and file uploads are refused | 20.5 |
+| 2026-10-19 | `/health/live` and `/health/ready` (database, migrations, master key), answered before the host name is checked | 20.7 |
+| 2026-10-19 | Installed by `deploy/install` into a new `/opt/yk-portal/releases/VERSION-TIME` each time, with `current` pointing at the one in use; a sandboxed systemd unit that gives up after 5 failed starts in 2 minutes; every command's files at umask 077 | 20.9 |
+| 2026-10-19 | Under a path: no HSTS header (the site's policy), and a CSRF cookie name of yk-portal's own (`yk_csrftoken`) | 20.2 |
 
 ---
 
@@ -787,7 +801,7 @@ Adds to spec §4.3, §30, §36, §44.6 and §48 (spec Phase 8).
 5.2 supports PostgreSQL 14 and newer; yk-portal is tested with 18, Ubuntu
 26.04's, and with Ubuntu's SQLite (3.46).
 
-18.2 PostgreSQL setup (README, "PostgreSQL"):
+18.2 PostgreSQL setup (docs/deployment.md, "PostgreSQL"):
 
 - one dedicated role, which owns yk-portal's database and has no other
   privilege: not a superuser, no `CREATEDB`, `CREATEROLE`, `REPLICATION` or
@@ -1001,3 +1015,169 @@ nightly backup that keeps 30 days.
 SQLite backed up in 28 seconds, verified in 8 and restored in 49 to 56;
 PostgreSQL backed up in 46 seconds and restored in 83 to 98, most of it in
 psycopg's pure-Python layer; memory stayed under 125 MB.
+
+---
+
+## 20. Production hardening
+
+Adds to spec §3, §18.2, §32, §33, §40, §41, §45 and §49 (spec Phase 10).
+`docs/deployment.md` is the deployment guide; `deploy/` holds the install
+script, the systemd unit and nginx examples.
+
+20.1 **The application server.** `yk-portal serve` runs gunicorn, configured
+from `/etc/yk-portal/config.toml`: it listens on `listen_address` and
+`listen_port` with `workers` worker processes (new key, 1 to 32, default 4;
+each sign-in's Argon2id check uses about 100 MiB). It loads the application
+before starting the workers, so a missing master key or a bad setting stops
+it at once with the reason; problems that may pass, such as a database not
+yet reachable, are logged and reported by `/health/ready`, and it starts
+anyway. It reports ready to systemd (`Type=notify`). gunicorn's access log is
+off: the reverse proxy logs requests, with the clients' addresses. Its
+control socket is off. No request header chooses the path the application
+sees: gunicorn takes a `SCRIPT_NAME` header from trusted proxies by default,
+which through a proxy that passes headers with `_` in their names would let a
+client get past the proxy's rules (found while reviewing: `/x/health/live`
+with `SCRIPT_NAME: /x` reached the health check); that is off, and only
+`X-Forwarded-Proto` says HTTPS, as Django reads it. The production settings pass Django's deployment
+checks (`yk-portal check --deploy`), but for HSTS preloading (20.3).
+
+20.2 **Under a path.** `public_base_url` may have a path, such as
+`https://www.example.com/yk` (plain segments of letters, digits and `-._~`; a
+trailing `/` is dropped). The reverse proxy strips the path before passing a
+request on; yk-portal puts it back in its links, redirects, static files and
+the paths of its cookies. The user asked for it for the lab (20.11). Under a
+path, yk-portal shares the site's origin, so script on any page of the site
+can read its pages with the user's session: the deployment guide recommends a
+host name of its own for production. Under a path it sends no HSTS header,
+whose policy would be the whole site's and every name under it, and its CSRF
+cookie is `yk_csrftoken`, not Django's `csrftoken`, which another application
+of the site could set for the whole site and the browser would send too. The
+static files' URL is set whole (`PATH/static/`): Django adds the path to a
+relative one only when first read, before any request, which left the pages
+without their styles and scripts under a path (found by the review; a test
+now runs `yk-portal serve` under a path).
+
+20.3 **The reverse proxy and its headers** (spec §32). `X-Forwarded-For` was
+already read only through the trusted proxies (sessions). `X-Forwarded-Proto`
+is now believed only from them too: from any other address it is dropped, and
+plain HTTP is redirected to `public_base_url`'s host, so a client that reaches
+the application directly can't claim HTTPS. HSTS is sent for a year, with
+`includeSubDomains` (the names under the public host name, not its siblings),
+on a host name of its own only (20.2);
+not preloaded, which is a decision for the enterprise's whole domain (Django's
+check `security.W021` is silenced). The examples: `deploy/nginx/yk-portal.conf`
+for a host name of its own, `deploy/nginx/yk-portal-path.conf` for a path of
+a site. Both set `X-Forwarded-For` to the client's address, replacing what
+the client sent, limit sign-in requests to 10 a minute per address (bursts of
+10, answering 429), refuse bodies over 256 KiB, add no security headers
+(yk-portal sets them) and answer 404 for `/health/`.
+
+20.4 **Failed sign-ins per address** (spec §18.2, §43 item 6). An address
+with as many failed sign-ins within the wait as the limit (settings: 10 within
+15 minutes) must wait: its sign-ins are refused before anything is checked,
+with HTTP 429 and "Too many failed sign-ins from your address. Try again in N
+minutes.", until the oldest failure counted is older than the wait. Refused
+sign-ins don't count against an account or its YubiKeys, so the lockout can't
+be used from that address to lock accounts, and spend no password check.
+Failures are `LOGIN_FAILURE` and `LOGIN_LOCKED` events of the audit log (which
+records each with its address; new index on address and time), so every
+worker and both backends count the same, and nothing more is stored. A refusal
+is recorded as `LOGIN_THROTTLED` (no account, the address, the limit, the
+wait, the seconds left) once per address and wait, so an address that keeps
+trying doesn't fill the audit log, which is never purged. A trusted proxy's
+own address means the proxy didn't send the client's: it is never counted,
+since every client would share one count, and the operational log says so
+once. Sign-ins checked at the same moment may each pass before the others'
+failures are recorded, a few beyond the limit at most (one per worker); the
+proxy's request limit adds to it. Addresses are counted one by one, IPv6
+too: a client that can change its address within its network can try more
+often, which the audit log shows.
+
+20.5 **Headers, caching and request size** (spec §33). Every response gets
+the Content-Security-Policy (as before), `Permissions-Policy` (no camera,
+geolocation, microphone, payment or USB), `Cross-Origin-Resource-Policy:
+same-origin`, and, unless it says otherwise, `Cache-Control: no-store`: every
+page shows accounts, YubiKeys or secrets. Django adds `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and
+`Cross-Origin-Opener-Policy: same-origin`. Static files are served by the
+application (WhiteNoise) from the installed package, so the proxy only
+proxies and no `collectstatic` step exists; browsers may keep them for a
+minute, without cross-origin access. Request bodies over 256 KiB and any file
+upload are refused (400); the largest form is a few KiB. A form refused for
+its CSRF token shows "Form not accepted" in the portal's layout (403);
+tests check that every route refuses a POST without the token, that every
+form in the templates carries it, and that only the two search forms use GET.
+
+20.6 **psycopg's C implementation** (user's decision). PostgreSQL
+installations may build it: `deploy/install --postgresql-c` (the
+`postgresql-c` extra), with `build-essential`, `python3-dev` and `libpq-dev`.
+It uses Ubuntu's libpq and OpenSSL, so their security updates apply; the
+bundled binary wheel was not chosen. SQLite installations need nothing more.
+Measured in the lab with 200,000 audit events: a backup in 7.6 s instead of
+12.2, a restore in 11.6 s instead of 16.7. `database-status` shows the
+implementation, with a warning for the pure-Python one.
+
+20.7 **Health checks** (spec §41). `/health/live` answers `{"status":
+"live"}` while the process runs. `/health/ready` answers `{"status":
+"ready"}`, or 503 with `{"status": "not ready", "failed": [...]}` naming the
+failed checks: `database` (unreachable, or no SQLite file yet; the check never
+creates one), `migrations` (missing, or ones this version doesn't know),
+`master key` (unreadable, or the file now holds another key than the one in
+use: restart). The reasons go to the operational log only. They are answered
+first, before the host name is checked and without a session, so monitoring
+asks the application directly (`http://127.0.0.1:8000/health/ready`); the
+proxy examples don't pass them on.
+
+20.8 **Logging** (spec §40). The service's log goes to standard error, so to
+the journal, as `LEVEL logger: message` (the journal adds the time and
+process): startup (version, public address, backend), readiness problems,
+request errors, warnings. The audit copy is apart, as before (section 17.6).
+A test signs an account through its whole life with every logger at DEBUG
+and finds no secret in any record.
+
+20.9 **Installation** (spec §49). `deploy/install`, as root from a release's
+source tree, creates the `yk-portal` system account (no login shell, home
+`/var/lib/yk-portal`), `/etc/yk-portal` (`root:yk-portal` 0750) and
+`/var/lib/yk-portal` and `/var/backups/yk-portal` (`yk-portal` 0700), installs
+the release with uv, at umask 022 whatever root's, into a new directory each
+time, `/opt/yk-portal/releases/VERSION-TIME` (root's: the service can't
+change its code; never one that exists, which could be the one running),
+from the lock file, without development tools, on the system's Python, then
+points `/opt/yk-portal/current` and `/usr/local/bin/yk-portal` at it in one
+step, installs `yk-portal.service`, and on a first install copies the example
+configuration. A release that fails to install is removed. It never touches the configuration, the
+master key or the database, and never starts or stops the service. Earlier
+releases stay, for going back with the backup made before the upgrade (the
+guide's "Upgrade" and "Go back"). The unit runs `yk-portal serve` as
+`yk-portal` with umask 077 and a sandbox (no capabilities, read-only system,
+private `/tmp` and `/dev`, a user namespace, system calls of
+`@system-service`, no writable and executable memory, writes only to
+`/var/lib/yk-portal`); `systemd-analyze security` rates it 1.1, "OK". A
+start that fails is tried again after 5 seconds, 5 times in 2 minutes at
+most; then the unit stays failed, rather than retrying a missing master key
+for ever. Every
+`yk-portal` command also sets umask 077, so the SQLite database `migrate`
+creates is 0600 whatever the shell's or sudo's umask (found in the lab: it
+was 0644). No `/var/log/yk-portal` (spec §49): the logs are the journal's.
+
+20.10 Tests run `yk-portal serve` itself: it starts, answers through
+"the proxy" (headers), redirects plain HTTP, refuses another host name,
+serves static files, stops on SIGTERM, and stops at once without its master
+key or with a bad configuration.
+
+20.11 **The lab** (user's decision). `lab/lab up` builds an image of the
+working tree (Ubuntu 26.04, uv, `deploy/install`) and runs it on a Docker
+network of its own, published on the host's `127.0.0.1` only; the host's
+nginx proxies a path of one of its sites to it (`lab/nginx/`, installed
+once), and yk-portal trusts the network's gateway, where Docker's port
+forwarding connects from. The lab's address and port are the machine's
+own, in `lab/lab.env`, which git ignores (`lab/lab.env.example` has example
+values): the repository names no real server.
+`lab/lab up --postgresql` adds a PostgreSQL 18 container, set up as the guide
+sets PostgreSQL up, and builds psycopg's C implementation. Nothing is kept;
+`lab/lab down` removes it all, and nginx answers 502 at the lab's address
+meanwhile.
+`lab/lab systemd-check` starts the unit under systemd, with its sandbox, in a
+privileged container with no network, signs in, checks the journal and the
+database file, checks that the unit ends failed without its master key, and
+removes the container. The lab is not for production.

@@ -6,19 +6,25 @@
 # and the master key in its own file. Unknown keys are errors.
 
 [application]
-# Where the application server listens. Only the reverse proxy should reach it.
+# Where the application server (yk-portal serve) listens. Only the reverse
+# proxy should reach it.
 listen_address = "127.0.0.1"
 listen_port = 8000
-# The address users browse to, through the reverse proxy. Required.
+# The address users browse to, through the reverse proxy. Required. A path,
+# such as https://www.example.com/yk, publishes yk-portal under that path of
+# a site (docs/deployment.md, "Under a path").
 public_base_url = "https://yk-portal.example.com"
+# Worker processes, each serving one request at a time. A sign-in's PIN check
+# uses about 100 MiB while it runs.
+workers = 4
 
 [database]
 # "sqlite" (the default) or "postgresql".
 backend = "sqlite"
 sqlite_path = "/var/lib/yk-portal/yk-portal.sqlite3"
 # For PostgreSQL: a libpq connection string without a password. Put the
-# password in a passfile (mode 0600, owned by the service account). README,
-# "PostgreSQL", shows how to set up the role and database.
+# password in a passfile (mode 0600, owned by the service account).
+# docs/deployment.md, "PostgreSQL", shows how to set up the role and database.
 # postgres_dsn = "host=db.example.com dbname=yk_portal user=yk_portal sslmode=verify-full sslrootcert=/etc/yk-portal/db-ca.crt passfile=/etc/yk-portal/pgpass"
 
 [security]
@@ -27,8 +33,9 @@ sqlite_path = "/var/lib/yk-portal/yk-portal.sqlite3"
 master_key_path = "/etc/yk-portal/master.key"
 
 [proxy]
-# Addresses or networks of the reverse proxy, whose forwarded client
-# addresses are trusted.
+# Addresses or networks of the reverse proxy, whose X-Forwarded-For and
+# X-Forwarded-Proto are believed. A request from any other address can't say
+# it came over HTTPS, so it is redirected to public_base_url.
 trusted_proxy_addresses = ["127.0.0.1", "::1"]
 
 [logging]

@@ -1,6 +1,7 @@
 import os
 import signal
 import stat
+import sys
 import time
 
 import pytest
@@ -9,9 +10,14 @@ from yk_portal import main
 
 
 def run(monkeypatch, *args: str) -> int:
+    """yk-portal ARGS in this process; the umask it sets is put back afterwards."""
     monkeypatch.setattr("sys.argv", ["yk-portal", *args])
-    with pytest.raises(SystemExit) as excinfo:
-        main()
+    umask = os.umask(0o022)
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+    finally:
+        os.umask(umask)
     code = excinfo.value.code
     assert isinstance(code, int)
     return code
@@ -69,3 +75,21 @@ def test_a_command_stopped_by_sigterm_ends_as_after_ctrl_c(monkeypatch):
     finally:
         signal.signal(signal.SIGTERM, handler)
     assert cleaned == [True]
+
+
+def test_every_command_runs_with_umask_077(monkeypatch):
+    """Files a command creates, such as the SQLite database, are the service account's
+    alone, whatever the umask of the shell or sudo."""
+    seen = []
+
+    def command(argv):
+        seen.append(os.umask(0o077))
+        sys.exit(0)
+
+    monkeypatch.setattr("django.core.management.execute_from_command_line", command)
+    handler = signal.getsignal(signal.SIGTERM)
+    try:
+        assert run(monkeypatch, "migrate") == 0
+    finally:
+        signal.signal(signal.SIGTERM, handler)
+    assert seen == [0o077]

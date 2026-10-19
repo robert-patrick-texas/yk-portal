@@ -15,7 +15,16 @@ from yk_portal.core.database_status import _is_local, _unicode_case, database_st
 
 LABELS = {
     "sqlite": ["Backend", "Database", "Settings", "Migrations", "Audit log"],
-    "postgresql": ["Backend", "Database", "TLS", "Role", "Encoding", "Migrations", "Audit log"],
+    "postgresql": [
+        "Backend",
+        "Database",
+        "Driver",
+        "TLS",
+        "Role",
+        "Encoding",
+        "Migrations",
+        "Audit log",
+    ],
 }
 
 
@@ -33,6 +42,19 @@ def test_the_test_database_is_ready():
     shown = dict(status.lines)
     assert shown["Migrations"].startswith("all ")
     assert shown["Audit log"] == "protected by triggers"
+
+
+@pytest.mark.django_db
+@pytest.mark.skipif(connection.vendor != "postgresql", reason="psycopg")
+def test_the_postgresql_driver_is_shown(monkeypatch):
+    import psycopg
+
+    shown = dict(database_status(connection).lines)
+    assert shown["Driver"] == f"psycopg {psycopg.__version__} ({psycopg.pq.__impl__})"
+    monkeypatch.setattr(psycopg.pq, "__impl__", "python")
+    assert any("pure-Python" in w for w in database_status(connection).warnings)
+    monkeypatch.setattr(psycopg.pq, "__impl__", "c")
+    assert not any("pure-Python" in w for w in database_status(connection).warnings)
 
 
 @pytest.mark.django_db
@@ -58,10 +80,12 @@ def test_missing_audit_triggers_are_a_problem():
 def test_a_migration_not_applied_is_a_problem():
     executor = MigrationExecutor(connection)
     try:
-        executor.migrate([("audit", "0004_immutable")])
+        executor.migrate([("audit", "0005_details_unicode")])
         status = database_status(connection)
         assert dict(status.lines)["Migrations"].endswith("applied, 1 not")
-        assert status.problems == ["not applied: audit.0005_details_unicode; run yk-portal migrate"]
+        assert status.problems == [
+            "not applied: audit.0006_login_throttled_source_ip; run yk-portal migrate"
+        ]
     finally:
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())

@@ -1,0 +1,65 @@
+# yk-portal's application server (spec §49; docs/deployment.md).
+# deploy/install installs it as /etc/systemd/system/yk-portal.service.
+#
+# It runs as the unprivileged yk-portal account, reads /etc/yk-portal, writes
+# only /var/lib/yk-portal (the SQLite database), and listens where
+# /etc/yk-portal/config.toml says, for the reverse proxy. Check the sandbox
+# with: systemd-analyze security yk-portal
+
+[Unit]
+Description=yk-portal: accounts and YubiKey OTP credentials
+After=network-online.target postgresql.service
+Wants=network-online.target
+# A missing master key or a bad setting stops it at once (journalctl -u
+# yk-portal says why): after 5 tries in 2 minutes, systemd leaves it failed.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+# gunicorn tells systemd once it listens.
+Type=notify
+NotifyAccess=main
+User=yk-portal
+Group=yk-portal
+ExecStart=/opt/yk-portal/current/bin/yk-portal serve
+# The workers finish their requests first; gunicorn waits for them up to 30 s.
+KillMode=mixed
+TimeoutStopSec=45s
+Restart=on-failure
+RestartSec=5s
+
+UMask=0077
+StateDirectory=yk-portal
+StateDirectoryMode=0700
+
+# Sandbox
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateUsers=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

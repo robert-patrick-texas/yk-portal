@@ -1,5 +1,6 @@
-"""No secret reaches the audit log, in the database or the journal (spec §26, §27): an
-account's whole life through the pages, with every secret it uses."""
+"""No secret reaches the audit log, in the database or the journal (spec §26, §27), or
+any other log, at any level (spec §40, §48): an account's whole life through the pages,
+with every secret it uses."""
 
 import json
 import logging
@@ -28,7 +29,7 @@ AES_KEY = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 TEMPORARY = re.compile(r'<p class="secret"><code>([a-z0-9-]{19})</code>')
 
 
-def test_an_accounts_life_leaves_no_secret_in_the_audit_log(
+def test_an_accounts_life_leaves_no_secret_in_the_audit_log_or_any_log(
     client, make_user, make_credential, make_otp, caplog, django_capture_on_commit_callbacks
 ):
     secrets: list[str] = [PIN, NEW_PIN, ADMIN_PIN, EMAIL, PRIVATE_ID, AES_KEY, ROOT_PIN]
@@ -52,7 +53,7 @@ def test_an_accounts_life_leaves_no_secret_in_the_audit_log(
     make_credential(root, public_id=ROOT_PUBLIC_ID, private_id=ROOT_PRIVATE_ID, pin=ROOT_PIN)
     nina = Client()
     with (
-        caplog.at_level(logging.INFO, logger="yk_portal.audit"),
+        caplog.at_level(logging.DEBUG),
         django_capture_on_commit_callbacks(execute=True),
     ):
         sign_in(client, "root", ROOT_PIN + otp(ROOT_PUBLIC_ID))
@@ -96,6 +97,7 @@ def test_an_accounts_life_leaves_no_secret_in_the_audit_log(
         assert temporary
         secrets.append(temporary.group(1))
         client.post(reverse("admin-user-delete", args=[user_id]), {"username": "nina"})
+        client.get(reverse("admin-user", args=[user_id]))  # gone: Django logs "Not Found"
 
     recorded = [e.event_type for e in AuditEvent.objects.order_by("timestamp")]
     for expected in (
@@ -106,8 +108,11 @@ def test_an_accounts_life_leaves_no_secret_in_the_audit_log(
         EventType.ACCOUNT_DELETED,
     ):
         assert expected in recorded
-    assert len(caplog.messages) == len(recorded)
+    journal = [r for r in caplog.records if r.name == "yk_portal.audit"]
+    assert len(journal) == len(recorded)
+    assert any(r.name == "django.request" for r in caplog.records)  # every logger is read
+    logged = [caplog.text, *(f"{r.msg} {r.args}" for r in caplog.records)]
     stored = [json.dumps([str(value) for value in row]) for row in AuditEvent.objects.values_list()]
-    for text in (*stored, *caplog.messages):
+    for text in (*stored, *logged):
         for secret in secrets:
             assert secret.lower() not in text.lower(), (secret, text)

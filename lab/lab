@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# The yk-portal lab (lab/README.md): yk-portal in a container, published on the
+# host's 127.0.0.1 only, for the host's nginx to proxy. Nothing is kept: down
+# removes the containers and their data.
+#
+#   lab/lab up [--postgresql]   build and start it (again), with SQLite or PostgreSQL
+#   lab/lab down                stop and remove it
+#   lab/lab status              what runs, and whether it is ready
+#   lab/lab logs [-f]           the application server's log
+#   lab/lab yk-portal ARGS...   a yk-portal command, as the yk-portal account
+#   lab/lab shell               a root shell in the container
+#   lab/lab systemd-check       start yk-portal.service under systemd, sandboxed, and
+#                               check it, in a container of its own that is then removed
+#
+# Settings: lab/lab.env, this machine's own and ignored by git (copy
+# lab/lab.env.example), or the environment, which wins:
+#   YK_LAB_PUBLIC_BASE_URL  where the host's reverse proxy publishes the lab (required)
+#   YK_LAB_PORT             the host's 127.0.0.1 port for the proxy's upstream (8100)
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+NAME=yk-portal-lab
+DB=yk-portal-lab-db
+NETWORK=yk-portal-lab
+SETTINGS=lab/lab.env
+JOURNAL=/run/systemd/journal/dev-log
+
+# KEY=VALUE lines, read rather than run.
+if [ -f "$SETTINGS" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            YK_LAB_PUBLIC_BASE_URL | YK_LAB_PORT)
+                [ -n "${!key:-}" ] || printf -v "$key" '%s' "$value" ;;
+        esac
+    done < "$SETTINGS"
+fi
+PORT=${YK_LAB_PORT:-8100}
+PUBLIC_BASE_URL=${YK_LAB_PUBLIC_BASE_URL:-}
+
+usage() { sed -n '6,13p' "$0" | sed 's/^#  *//'; }
+die() { echo "lab: $*" >&2; exit 1; }
+
+tty_flags() { if [ -t 0 ] && [ -t 1 ]; then echo -it; else echo -i; fi; }
+
+down() {
+    docker rm -f "$NAME" "$DB" > /dev/null 2>&1 || true
+    docker network rm "$NETWORK" > /dev/null 2>&1 || true
+}
+
+ready() {
+    curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health/ready" 2> /dev/null
+}
+
+up() {
+    local postgresql=no
+    case "${1:-}" in
+        --postgresql) postgresql=yes ;;
+        "") ;;
+        *) usage >&2; exit 2 ;;
+    esac
+    [ -n "$PUBLIC_BASE_URL" ] ||
+        die "set YK_LAB_PUBLIC_BASE_URL in $SETTINGS (see $SETTINGS.example)"
+    local image=$NAME build_args=()
+    if [ "$postgresql" = yes ]; then
+        image=$NAME:pg
+        build_args=(--build-arg INSTALL_OPTIONS=--postgresql-c)
+    fi
+    echo "Building $image"
+    docker build -q -f lab/Dockerfile ${build_args[@]+"${build_args[@]}"} -t "$image" . > /dev/null
+    down
+    docker network create "$NETWORK" > /dev/null
+    local gateway
+    gateway=$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' "$NETWORK")
+    [ -n "$gateway" ] || die "no gateway address for the $NETWORK network"
+
+    local env=(-e "YK_LAB_PUBLIC_BASE_URL=$PUBLIC_BASE_URL" -e "YK_LAB_TRUSTED_PROXY=$gateway")
+    if [ "$postgresql" = yes ]; then
+        local password
+        password=$(head -c 24 /dev/urandom | base64 | tr -d '/+=')
+        # PostgreSQL as the deployment guide sets it up: a role that owns the database.
+        docker pull -q postgres:18 > /dev/null
+        docker run -d --name "$DB" --network "$NETWORK" \
+            -e POSTGRES_PASSWORD="$(head -c 24 /dev/urandom | base64)" postgres:18 > /dev/null
+        until docker exec "$DB" pg_isready -q -U postgres 2> /dev/null; do sleep 1; done
+        sleep 2  # the image restarts the server once after initializing it
+        until docker exec "$DB" pg_isready -q -U postgres 2> /dev/null; do sleep 1; done
+        docker exec -i "$DB" psql -q -v ON_ERROR_STOP=1 -U postgres << SQL
+CREATE ROLE yk_portal LOGIN PASSWORD '$password';
+CREATE DATABASE yk_portal OWNER yk_portal ENCODING 'UTF8' LOCALE 'C.UTF-8' TEMPLATE template0;
+REVOKE ALL ON DATABASE yk_portal FROM PUBLIC;
+SQL
+        env+=(-e "YK_LAB_POSTGRES_DSN=host=$DB dbname=yk_portal user=yk_portal")
+        env+=(-e "YK_LAB_PGPASS=$DB:5432:yk_portal:yk_portal:$password")
+    fi
+    local journal=()
+    [ -S "$JOURNAL" ] && journal=(-v "$JOURNAL:/dev/log")
+    docker run -d --name "$NAME" --network "$NETWORK" -p "127.0.0.1:$PORT:8000" \
+        ${journal[@]+"${journal[@]}"} "${env[@]}" "$image" > /dev/null
+
+    for _ in $(seq 60); do
+        if ready > /dev/null; then
+            echo "yk-portal lab ready at $PUBLIC_BASE_URL/ (127.0.0.1:$PORT, proxy $gateway)."
+            echo "First admin: lab/lab yk-portal bootstrap-admin USERNAME"
+            return
+        fi
+        sleep 1
+    done
+    docker logs --tail 20 "$NAME" >&2
+    die "not ready after 60 seconds"
+}
+
+systemd_check() {
+    # systemd needs the container privileged to set up each unit's sandbox. It has
+    # no network but its own loopback, and is removed afterwards.
+    docker build -q -f lab/Dockerfile -t "$NAME" . > /dev/null
+    docker build -q -f lab/Dockerfile.systemd -t "$NAME:systemd" . > /dev/null
+    docker rm -f "$NAME-systemd" > /dev/null 2>&1 || true
+    docker run -d --name "$NAME-systemd" --privileged --cgroupns=private --network none \
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp "$NAME:systemd" > /dev/null
+    local status=0
+    docker exec "$NAME-systemd" /usr/local/src/yk-portal/lab/systemd-check || status=$?
+    docker rm -f "$NAME-systemd" > /dev/null
+    return "$status"
+}
+
+case "${1:-}" in
+    up) shift; up "$@" ;;
+    systemd-check) systemd_check ;;
+    down) down; echo "yk-portal lab removed." ;;
+    status)
+        docker ps -a --filter "name=^($NAME|$DB)\$" --format '{{.Names}}: {{.Status}}'
+        ready && echo || echo "not ready"
+        ;;
+    logs) shift; docker logs "$@" "$NAME" ;;
+    yk-portal) shift; docker exec "$(tty_flags)" -u yk-portal "$NAME" yk-portal "$@" ;;
+    shell) docker exec "$(tty_flags)" "$NAME" bash ;;
+    -h | --help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

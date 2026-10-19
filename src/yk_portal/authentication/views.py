@@ -3,11 +3,11 @@ from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
 from .forms import LoginForm
-from .login import LoginFailed, log_in
+from .login import LoginFailed, LoginThrottled, log_in
 from .sessions import (
-    COOKIE,
     Client,
     PortalRequest,
+    delete_session_cookie,
     end_session,
     request_actor,
     set_session_cookie,
@@ -20,7 +20,7 @@ def login(request: PortalRequest) -> HttpResponse:
     if request.account is not None:
         return redirect("home")
     form = LoginForm(request.POST if request.method == "POST" else None)
-    error = ""
+    error, status = "", 200
     if form.is_valid():
         try:
             _, token = log_in(
@@ -28,11 +28,13 @@ def login(request: PortalRequest) -> HttpResponse:
             )
         except LoginFailed as e:
             error = str(e)
+            status = 429 if isinstance(e, LoginThrottled) else 200
         else:
             response = redirect("home")
             set_session_cookie(response, token)
             return response
-    return render(request, "authentication/login.html", {"form": form, "error": error})
+    context = {"form": form, "error": error}
+    return render(request, "authentication/login.html", context, status=status)
 
 
 def logout(request: PortalRequest) -> HttpResponse:
@@ -41,5 +43,5 @@ def logout(request: PortalRequest) -> HttpResponse:
     if request.portal_session is not None:
         end_session(request.portal_session, request_actor(request))
     response = redirect("login")
-    response.delete_cookie(COOKIE, samesite="Strict")
+    delete_session_cookie(response)
     return response

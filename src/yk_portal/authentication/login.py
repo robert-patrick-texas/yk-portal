@@ -13,7 +13,9 @@ the failed-login limit locks the account (addendum §2.14).
 """
 
 import functools
+import math
 import secrets
+from datetime import timedelta
 from typing import NoReturn
 
 from django.core.exceptions import ValidationError
@@ -36,6 +38,7 @@ from yk_portal.yubikeys.models import YubikeyCredential
 from yk_portal.yubikeys.otp import OTP_LENGTH, OtpRejected, Rejection, parse_otp
 from yk_portal.yubikeys.service import accept_otp, find_credential
 
+from . import throttle
 from .models import Session
 from .sessions import Client, purge_ended_sessions, start_session
 
@@ -47,6 +50,18 @@ class LoginFailed(Exception):
 
     def __init__(self) -> None:
         super().__init__(MESSAGE)
+
+
+class LoginThrottled(LoginFailed):
+    """A login refused unchecked: its address has too many failed sign-ins (spec §18.2)."""
+
+    def __init__(self, waiting: timedelta) -> None:
+        minutes = max(1, math.ceil(waiting.total_seconds() / 60))
+        Exception.__init__(
+            self,
+            "Too many failed sign-ins from your address. "
+            f"Try again in {minutes} minute{'s' if minutes > 1 else ''}.",
+        )
 
 
 def split_passcode(passcode: str) -> tuple[str, str | None]:
@@ -68,9 +83,16 @@ def log_in(username: str, passcode: str, client: Client) -> tuple[Session, str]:
         The new session and the token for its cookie.
 
     Raises:
-        LoginFailed: For any refusal. Refusals that count (spec §18.1) may lock the
-            account (addendum §2.10).
+        LoginThrottled: The address must wait: nothing was checked (spec §18.2).
+        LoginFailed: For any other refusal. Refusals that count (spec §18.1) may lock
+            the account (addendum §2.10).
     """
+    portal_settings = current_settings()
+    waiting = throttle.wait(client.source_ip, portal_settings)
+    if waiting is not None:
+        assert client.source_ip is not None  # noqa: S101 - wait() needs an address
+        throttle.refused(client.source_ip, waiting, portal_settings)
+        raise LoginThrottled(waiting)
     username = services.normalize_username(username)
     anonymous = Actor(user=None, name="", source_ip=client.source_ip)
     user = User.objects.filter(username=username).first()

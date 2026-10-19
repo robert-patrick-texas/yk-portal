@@ -30,6 +30,8 @@ class PortalSettings:
     max_session_hours: int = 12
     temp_password_hours: int = 72
     failed_login_limit: int = 3
+    address_failure_limit: int = 10
+    address_wait_minutes: int = 15
     max_yubikeys_per_user: int = 10
     step_up_before_reveal: bool = True
     default_group: uuid.UUID | None = None
@@ -44,6 +46,8 @@ NUMBER_RANGES = {
     "max_session_hours": (1, 24),
     "temp_password_hours": (1, 336),
     "failed_login_limit": (1, 10),
+    "address_failure_limit": (1, 100),
+    "address_wait_minutes": (1, 1440),
     "max_yubikeys_per_user": (1, 10),
 }
 KEYS = tuple(f.name for f in fields(PortalSettings))
