@@ -4,7 +4,14 @@ from django.views.decorators.http import require_http_methods
 
 from .forms import LoginForm
 from .login import LoginFailed, log_in
-from .sessions import COOKIE, Client, PortalRequest, end_session, set_session_cookie
+from .sessions import (
+    COOKIE,
+    Client,
+    PortalRequest,
+    end_session,
+    request_actor,
+    set_session_cookie,
+)
 
 
 @require_http_methods(["GET", "POST"])
@@ -32,7 +39,7 @@ def logout(request: PortalRequest) -> HttpResponse:
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if request.portal_session is not None:
-        end_session(request.portal_session)
+        end_session(request.portal_session, request_actor(request))
     response = redirect("login")
     response.delete_cookie(COOKIE, samesite="Strict")
     return response

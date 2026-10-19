@@ -14,7 +14,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.authentication.access import admin_required
 from yk_portal.authentication.login import LoginFailed, confirm_identity
-from yk_portal.authentication.sessions import Client, PortalRequest, request_actor
+from yk_portal.authentication.sessions import PortalRequest, request_actor
 
 from . import management
 from .forms import AdminPinForm, AdminYubikeyForm, StepUpForm, YubikeyEditForm
@@ -145,11 +145,12 @@ def secrets(request: PortalRequest, user_id: uuid.UUID, credential_id: uuid.UUID
         if which not in ("private_id", "aes_key", "both"):
             return HttpResponseBadRequest()
         confirmed = not step_up
+        actor = request_actor(request)
         if step_up and form.is_valid():
             admin = request.account
             assert admin is not None  # noqa: S101 - admin_required ensures it
             try:
-                confirm_identity(admin, form.cleaned_data["passcode"], Client.of(request))
+                confirm_identity(actor, form.cleaned_data["passcode"])
             except LoginFailed:
                 admin.refresh_from_db()
                 if admin.state != AccountState.ACTIVE:
@@ -159,11 +160,12 @@ def secrets(request: PortalRequest, user_id: uuid.UUID, credential_id: uuid.UUID
                 confirmed = True
             form = StepUpForm()  # the passcode is never sent back
         if confirmed:
-            actor = request_actor(request)
             if which in ("private_id", "both"):
-                revealed["private_id"] = management.reveal_private_id(credential, actor)
+                revealed["private_id"] = management.reveal_private_id(
+                    credential, actor, step_up=step_up
+                )
             if which in ("aes_key", "both"):
-                revealed["aes_key"] = management.reveal_aes_key(credential, actor)
+                revealed["aes_key"] = management.reveal_aes_key(credential, actor, step_up=step_up)
     return render(
         request,
         "yubikeys/admin/secrets.html",

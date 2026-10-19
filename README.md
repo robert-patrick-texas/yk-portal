@@ -11,7 +11,7 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 6 done: configuration file, master key,
+**Status:** spec Phases 1 to 7 done: configuration file, master key,
 AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and
 their states, temporary passwords, roles with last-admin protection, groups,
 the database-backed settings and audit events, and the `bootstrap-admin`,
@@ -25,7 +25,9 @@ sync from it; the admin pages (users: list and search, create, edit with a
 display name and comment for admins, disable, enable, unlock, reset to
 provisioning, temporary passwords, the admin role, hard delete; any account's YubiKeys: pre-provision, edit, set
 the PIN, disable, remove, reveal the secrets after a step-up; groups;
-settings). The audit viewer comes next.
+settings); the audit log, whose events can't be changed or deleted, with
+its admin page and its copy in the system journal. PostgreSQL parity
+(spec Phase 8) comes next.
 
 ## Documents
 
@@ -96,6 +98,21 @@ sudo -u yk-portal yk-portal bootstrap-admin            # the first admin; prints
 Django's secret key is derived from the master key, so nothing starts
 without it. Packaging, the service account and systemd come in spec Phase 10.
 
+## Audit log
+
+Every security-sensitive action records an audit event (spec §27; addendum
+§17): sign-ins and sign-outs, account and YubiKey changes, secret reveals,
+settings, groups, the commands, and refused admin pages. Events are never
+changed or deleted, by the application or by SQL (database triggers), except
+by restoring a backup, which needs no extra privilege; no secret is ever
+recorded. Admins read them on the Audit log page. Each
+event is also written to the system journal, apart from the application's
+log and whatever its level, from the web application and the commands alike:
+
+```bash
+journalctl -t yk-portal-audit --since today
+```
+
 ## Administrative commands
 
 Run as the yk-portal service account (`sudo -u yk-portal yk-portal ...`), or
@@ -141,7 +158,7 @@ sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal 
 | `src/yk_portal/accounts/` | Users, roles, account states, groups; onboarding and the admin user and group pages |
 | `src/yk_portal/authentication/` | Login, PINs and temporary passwords, lockout, sessions, step-up |
 | `src/yk_portal/yubikeys/` | YubiKey credentials, OTP validation, replay counters; the users' and admins' YubiKey pages |
-| `src/yk_portal/audit/` | Audit events |
+| `src/yk_portal/audit/` | Immutable audit events (rewritten only by a restore), their journal copy, and the admin audit log page |
 | `src/yk_portal/portal_settings/` | The admin settings page and run-time settings |
 | `src/yk_portal/radiator/` | Export to and import from radiator-yubikey |
 | `src/yk_portal/backup/` | Encrypted backup and restore |

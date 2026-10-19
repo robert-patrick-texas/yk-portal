@@ -14,8 +14,10 @@ from django.shortcuts import redirect
 from django.views.decorators.cache import never_cache
 
 from yk_portal.accounts.models import AccountState
+from yk_portal.audit.models import EventType, Result
+from yk_portal.audit.service import record
 
-from .sessions import PortalRequest
+from .sessions import PortalRequest, request_actor
 
 type View = Callable[..., HttpResponse]
 
@@ -36,7 +38,8 @@ def active_required(view: View) -> View:
 
 def admin_required(view: View) -> View:
     """Only for ACTIVE accounts with the admin role (spec §6), read at each request so a
-    role taken away applies at once (spec §19). Other accounts get 403.
+    role taken away applies at once (spec §19). Other accounts get 403, recorded as
+    ACCESS_DENIED (addendum §17.4).
 
     Admin pages can show temporary passwords and YubiKey secrets: browsers and proxies
     may not keep them (spec §33).
@@ -50,6 +53,9 @@ def admin_required(view: View) -> View:
         if request.account.state != AccountState.ACTIVE:
             return redirect("provision")
         if not request.account.is_admin:
+            details = {"method": request.method, "path": request.path}
+            actor = request_actor(request)
+            record(EventType.ACCESS_DENIED, actor, details=details, result=Result.FAILURE)
             raise PermissionDenied
         return view(request, *args, **kwargs)
 

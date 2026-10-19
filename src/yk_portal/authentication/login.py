@@ -25,7 +25,11 @@ from yk_portal.accounts.models import AccountState, User
 from yk_portal.accounts.validators import validate_username
 from yk_portal.audit.models import EventType, Result
 from yk_portal.audit.service import Actor, record
-from yk_portal.authentication.passwords import check_web_password, hash_web_password
+from yk_portal.authentication.passwords import (
+    check_web_password,
+    hash_web_password,
+    looks_like_temporary_password,
+)
 from yk_portal.core import sha512_crypt
 from yk_portal.portal_settings.service import current as current_settings
 from yk_portal.yubikeys.models import YubikeyCredential
@@ -95,15 +99,19 @@ def _check_temporary_password(user: User, passcode: str, actor: Actor) -> None:
         _refuse(actor, user, "temporary password expired")
 
 
-def confirm_identity(user: User, passcode: str, client: Client) -> None:
+def confirm_identity(actor: Actor, passcode: str) -> None:
     """Step-up: the signed-in user's PIN and a fresh OTP again, before revealing a
     YubiKey secret (spec §20.2, addendum §3.2). A failure counts like a failed login.
+
+    Args:
+        actor: The signed-in user, with the request's address and session.
 
     Raises:
         LoginFailed: The passcode isn't good.
     """
-    actor = Actor(user=user, name=user.username, source_ip=client.source_ip)
-    _check_pin_and_otp(user, passcode, actor, "step-up: ")
+    if actor.user is None:
+        raise ValueError("step-up needs a signed-in user")
+    _check_pin_and_otp(actor.user, passcode, actor, "step-up: ")
 
 
 def _check_pin_and_otp(
@@ -160,11 +168,14 @@ def _dummy_hash() -> str:
 
 def _unknown(username: str) -> str:
     """The audit reason for an unknown username, naming it only if it could be one,
-    so a password typed into the username box isn't logged."""
+    so a password typed into the username box isn't logged. A temporary password could
+    be a username, but isn't named either (spec §27)."""
     try:
         validate_username(username)
     except ValidationError:
         return "unknown username (not a valid username)"
+    if looks_like_temporary_password(username):
+        return "unknown username (looks like a temporary password)"
     return f"unknown username {username}"
 
 

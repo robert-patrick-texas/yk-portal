@@ -242,7 +242,7 @@ def test_reveal_after_the_step_up(client, root, key, step_up):
     assert "Shown for 60 seconds" in html
     assert reveal_events() == [EventType.YUBIKEY_PRIVATE_ID_REVEALED]
     audit = AuditEvent.objects.get(event_type=EventType.YUBIKEY_PRIVATE_ID_REVEALED)
-    assert audit.details == {"public_id": "vvccccbbcdeg"}  # never the value
+    assert audit.details == {"public_id": "vvccccbbcdeg", "step_up": True}  # never the value
     assert audit.actor_username_snapshot == "root" and audit.target_username_snapshot == "alice"
 
     html = page(
@@ -262,6 +262,10 @@ def test_a_wrong_step_up_reveals_nothing_and_counts(client, root, key, step_up):
     assert not reveal_events()
     failure = AuditEvent.objects.get(event_type=EventType.LOGIN_FAILURE)
     assert failure.details["reason"] == "step-up: wrong PIN"
+    assert (failure.actor_user_id, failure.session_id) == (
+        root.pk,
+        Session.objects.get(user=root).pk,
+    )
     assert YubikeyCredential.objects.get(public_id=ROOT_PUBLIC_ID).failed_login_count == 1
 
 
@@ -300,6 +304,8 @@ def test_reveal_without_the_step_up_when_the_setting_is_off(client, root, key, a
     html = page(client.post(url("admin-yubikey-secrets", key), {"secret": "aes_key"}))
     assert revealed(html) == {"*" * 32: K1}
     assert reveal_events() == [EventType.YUBIKEY_AES_SECRET_REVEALED]
+    audit = AuditEvent.objects.get(event_type=EventType.YUBIKEY_AES_SECRET_REVEALED)
+    assert audit.details["step_up"] is False
 
 
 def test_an_unknown_secret_is_a_bad_request(client, root, key, actor):

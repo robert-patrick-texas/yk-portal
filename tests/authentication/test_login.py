@@ -6,6 +6,7 @@ from django.utils import timezone
 from yk_portal.accounts import services
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import AuditEvent, EventType, Result
+from yk_portal.audit.service import Actor
 from yk_portal.authentication.login import (
     MESSAGE,
     LoginFailed,
@@ -314,6 +315,12 @@ def test_an_unknown_username_that_could_be_a_password_isnt_logged():
     assert last_event().details == {"reason": "unknown username (not a valid username)"}
 
 
+def test_a_temporary_password_in_the_username_box_isnt_logged(newcomer):
+    """It is a valid username, but no account's name (spec §27)."""
+    refused(newcomer.temporary_password, newcomer.temporary_password)
+    assert last_event().details == {"reason": "unknown username (looks like a temporary password)"}
+
+
 # YubiKeys imported from Radiator (addendum §2.8)
 
 
@@ -399,16 +406,22 @@ def test_the_temporary_password_doesnt_take_an_otp(newcomer, otp):
 # Step-up before revealing a secret (spec §20.2)
 
 
+def as_actor(user: User, session: Session | None = None) -> Actor:
+    return Actor(user, user.username, CLIENT.source_ip, session.pk if session else None)
+
+
 def test_confirm_identity(alice, otp):
-    confirm_identity(alice, PIN + otp(3, 1), CLIENT)
+    confirm_identity(as_actor(alice), PIN + otp(3, 1))
     credential = YubikeyCredential.objects.get(public_id=PUBLIC_ID)
     assert (credential.last_usage_counter, credential.last_session_counter) == (3, 1)
 
 
 def test_failed_step_ups_count_and_lock(alice, otp):
+    session, _ = start_session(alice, CLIENT)
     for session_counter in (1, 2, 3):
         with pytest.raises(LoginFailed):
-            confirm_identity(alice, "wrong-pin1" + otp(3, session_counter), CLIENT)
+            confirm_identity(as_actor(alice, session), "wrong-pin1" + otp(3, session_counter))
     failures = AuditEvent.objects.filter(event_type=EventType.LOGIN_FAILURE)
     assert {e.details["reason"] for e in failures} == {"step-up: wrong PIN"}
+    assert {(e.actor_user_id, e.session_id) for e in failures} == {(alice.pk, session.pk)}
     assert fresh(alice).state == L

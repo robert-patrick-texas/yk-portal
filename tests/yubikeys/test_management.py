@@ -395,12 +395,13 @@ def test_a_disabled_key_can_be_removed(user, actor, make_credential):
 def test_admins_reveal_secrets_with_an_audit_event(user, make_user, make_credential):
     credential = make_credential(user, private_id=PRIVATE_ID, aes_key=K1)
     admin = Actor.for_user(make_user("boss", admin=True))
-    assert management.reveal_private_id(credential, admin) == PRIVATE_ID
-    assert management.reveal_aes_key(credential, admin) == K1
+    assert management.reveal_private_id(credential, admin, step_up=True) == PRIVATE_ID
+    assert management.reveal_aes_key(credential, admin, step_up=False) == K1
     events = AuditEvent.objects.order_by("timestamp")
+    public_id = credential.public_id
     assert [(e.event_type, e.details) for e in events] == [
-        (EventType.YUBIKEY_PRIVATE_ID_REVEALED, {"public_id": credential.public_id}),
-        (EventType.YUBIKEY_AES_SECRET_REVEALED, {"public_id": credential.public_id}),
+        (EventType.YUBIKEY_PRIVATE_ID_REVEALED, {"public_id": public_id, "step_up": True}),
+        (EventType.YUBIKEY_AES_SECRET_REVEALED, {"public_id": public_id, "step_up": False}),
     ]
 
 
@@ -409,9 +410,9 @@ def test_only_admins_reveal_secrets(user, actor, make_credential, who):
     credential = make_credential(user)
     reveal_as = Actor.for_user(user) if who == "user" else actor
     with pytest.raises(PermissionDenied):
-        management.reveal_private_id(credential, reveal_as)
+        management.reveal_private_id(credential, reveal_as, step_up=True)
     with pytest.raises(PermissionDenied):
-        management.reveal_aes_key(credential, reveal_as)
+        management.reveal_aes_key(credential, reveal_as, step_up=True)
     assert not AuditEvent.objects.exists()
 
 

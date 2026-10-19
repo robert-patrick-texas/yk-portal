@@ -14,12 +14,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpRequest, HttpResponse
 from django.utils import timezone
 
 from yk_portal.accounts.models import AccountState, User
-from yk_portal.audit.service import Actor
+from yk_portal.audit.models import EventType
+from yk_portal.audit.service import Actor, record
 from yk_portal.portal_settings.service import PortalSettings, current
 
 from .models import Session
@@ -100,9 +102,12 @@ def find_session(token: str, portal_settings: PortalSettings) -> Session | None:
     return session
 
 
-def end_session(session: Session) -> None:
-    """Sign out: revoke one session."""
-    Session.objects.filter(pk=session.pk, revoked_at__isnull=True).update(revoked_at=timezone.now())
+def end_session(session: Session, actor: Actor) -> None:
+    """Sign out: revoke one session, recorded as LOGOUT."""
+    with transaction.atomic():
+        live = Session.objects.filter(pk=session.pk, revoked_at__isnull=True)
+        if live.update(revoked_at=timezone.now()):
+            record(EventType.LOGOUT, actor, session.user)
 
 
 def purge_ended_sessions(portal_settings: PortalSettings) -> int:

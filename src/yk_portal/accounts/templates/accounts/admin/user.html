@@ -4,7 +4,10 @@
 <p><a href="{% url 'admin-users' %}">Users</a></p>
 <div class="heading-row">
   <h1>{{ user.username }} <span class="state state-{{ user.state|lower }}">{{ user.get_state_display }}</span></h1>
-  <a class="button" href="{% url 'admin-user-edit' user.pk %}">Edit</a>
+  <span class="button-row">
+    <a class="button" href="{% url 'admin-user-edit' user.pk %}">Edit</a>
+    <a class="button" href="{% url 'admin-audit' %}?user={{ user.pk }}">Audit log</a>
+  </span>
 </div>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <dl class="facts">

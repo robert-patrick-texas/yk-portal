@@ -1,21 +1,31 @@
-"""Audit events (spec §25.6, §27; addendum §12).
+"""Audit events (spec §25.6, §27; addendum §12, §17).
 
 User IDs are plain UUIDs, not foreign keys, so an event keeps the former ID
 and username snapshot after the user is hard deleted (spec §26). details
 never holds a secret, an email address or a full OTP.
+
+Events are immutable (spec §9): the model refuses to change or delete one,
+and so do database triggers (migration 0004), for SQL that bypasses it. Only
+restoring a backup rewrites them, inside immutability.rewritable().
 """
 
 import uuid
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from django.db import models
+from django.db import IntegrityError, models
 from django.utils import timezone
+
+from .immutability import rewriting
+
+IMMUTABLE = "audit events are immutable"
 
 
 class EventType(models.TextChoices):
     LOGIN_SUCCESS = "LOGIN_SUCCESS"
     LOGIN_FAILURE = "LOGIN_FAILURE"
     LOGIN_LOCKED = "LOGIN_LOCKED"
+    LOGOUT = "LOGOUT"
+    ACCESS_DENIED = "ACCESS_DENIED"
     ACCOUNT_CREATED = "ACCOUNT_CREATED"
     ACCOUNT_UPDATED = "ACCOUNT_UPDATED"
     ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
@@ -56,6 +66,18 @@ class Result(models.TextChoices):
     FAILURE = "FAILURE"
 
 
+class AuditEventQuerySet(models.QuerySet["AuditEvent"]):
+    def update(self, **kwargs: Any) -> int:
+        if not rewriting():
+            raise IntegrityError(IMMUTABLE)
+        return super().update(**kwargs)
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        if not rewriting():
+            raise IntegrityError(IMMUTABLE)
+        return super().delete()
+
+
 class AuditEvent(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     timestamp = models.DateTimeField(default=timezone.now)
@@ -70,10 +92,38 @@ class AuditEvent(models.Model):
     result = models.CharField(max_length=8, choices=Result.choices, default=Result.SUCCESS)
     details = models.JSONField(default=dict, blank=True)
 
-    objects: ClassVar[models.Manager[AuditEvent]] = models.Manager["AuditEvent"]()
+    objects: ClassVar[models.Manager[AuditEvent]] = AuditEventQuerySet.as_manager()
 
     class Meta:
         db_table = "audit_events"
+        indexes = [
+            models.Index(fields=["timestamp"], name="audit_events_timestamp"),
+            models.Index(fields=["event_type"], name="audit_events_event_type"),
+            models.Index(fields=["actor_user_id"], name="audit_events_actor"),
+            models.Index(fields=["target_user_id"], name="audit_events_target"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.timestamp:%Y-%m-%d %H:%M:%S} {self.event_type}"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if not self._state.adding and not rewriting():
+            raise IntegrityError(IMMUTABLE)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        if not rewriting():
+            raise IntegrityError(IMMUTABLE)
+        return super().delete(*args, **kwargs)
+
+    def detail_items(self) -> list[tuple[str, str]]:
+        """details as text, for the audit pages: lists joined with commas, None as "—"."""
+        return [(key, _text(value)) for key, value in self.details.items()]
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "—"
+    return str(value)

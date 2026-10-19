@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,3 +77,19 @@ def test_production_settings_need_a_configuration(production, monkeypatch, tmp_p
     monkeypatch.setenv("YK_PORTAL_CONFIG", str(tmp_path / "absent.toml"))
     with pytest.raises(ImproperlyConfigured, match="absent.toml: not found"):
         production.load()
+
+
+def test_production_sends_audit_events_to_the_journal_at_any_level(production):
+    """Audit events are kept apart from the application's log, and not filtered by its
+    level (spec §40; addendum §17.6)."""
+    create_master_key(production.key)
+    config = Path(os.environ["YK_PORTAL_CONFIG"])
+    config.write_text(config.read_text() + '[logging]\nlevel = "ERROR"\n')
+    logging = production.load().LOGGING
+    assert logging["root"]["level"] == "ERROR"
+    assert logging["loggers"]["yk_portal.audit"] == {
+        "handlers": ["journal"],
+        "level": "INFO",
+        "propagate": False,
+    }
+    assert logging["handlers"]["journal"] == {"()": "yk_portal.audit.journal.journal_handler"}

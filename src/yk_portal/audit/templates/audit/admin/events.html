@@ -1,0 +1,56 @@
+{% extends "web/base.html" %}
+{% block title %}Audit log · {% endblock %}
+{% block content %}
+<div class="heading-row">
+  <h1>Audit log</h1>
+</div>
+{% if account %}
+<p>Events of {% if account.exists %}<a href="{% url 'admin-user' account.id %}">{{ account.username }}</a>{% else %}{{ account.username }} <span class="tag">deleted</span>{% endif %}, as the actor or the target. <a href="{% url 'admin-audit' %}">All events</a></p>
+{% endif %}
+<form class="filters" method="get" role="search" novalidate>
+  {{ form.user }}
+  <label class="visually-hidden" for="{{ form.q.id_for_label }}">Search</label>
+  {{ form.q }}
+  <label class="visually-hidden" for="{{ form.event_type.id_for_label }}">Event</label>
+  {{ form.event_type }}
+  <label class="visually-hidden" for="{{ form.result.id_for_label }}">Result</label>
+  {{ form.result }}
+  <label for="{{ form.since.id_for_label }}">From</label>
+  {{ form.since }}
+  <label for="{{ form.until.id_for_label }}">To</label>
+  {{ form.until }}
+  <button type="submit">Filter</button>
+  {% if request.GET %}<a href="{% url 'admin-audit' %}">Clear</a>{% endif %}
+  {% for message in form.non_field_errors %}<p class="field-error">{{ message }}</p>{% endfor %}
+  {% for field in form %}{% for message in field.errors %}<p class="field-error">{{ field.label }}: {{ message }}</p>{% endfor %}{% endfor %}
+</form>
+<p class="muted">{{ page.paginator.count }} event{{ page.paginator.count|pluralize }}. Times are UTC.</p>
+<div class="table-wrap">
+<table class="list">
+  <thead>
+    <tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">IP address</th><th scope="col">Details</th></tr>
+  </thead>
+  <tbody>
+    {% for event in page %}
+    <tr>
+      <td class="nowrap"><a href="{% url 'admin-audit-event' event.pk %}">{{ event.timestamp|date:"Y-m-d H:i:s" }}</a></td>
+      <td><code>{{ event.event_type }}</code>{% if event.result == "FAILURE" %} <span class="tag failure">failed</span>{% endif %}</td>
+      <td>{{ event.actor_username_snapshot|default:"—" }}</td>
+      <td>{{ event.target_username_snapshot|default:"—" }}</td>
+      <td>{{ event.source_ip|default:"—" }}</td>
+      <td>{% if event.details %}<ul class="details">{% for key, value in event.detail_items %}<li><span class="muted">{{ key }}</span> {{ value|truncatechars:120 }}</li>{% endfor %}</ul>{% else %}—{% endif %}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="6">No events match.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="Pages">
+  {% if page.has_previous %}<a href="{% querystring page=page.previous_page_number %}">Newer</a>{% endif %}
+  <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="{% querystring page=page.next_page_number %}">Older</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

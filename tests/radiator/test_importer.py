@@ -107,7 +107,6 @@ def events(event_type: EventType) -> list[AuditEvent]:
 def test_full_import_creates_accounts_and_adds_keys(run, actor):
     netops = create_group("netops", actor)
     portal_settings.update({"default_group": netops.pk}, actor)
-    AuditEvent.objects.all().delete()
     output = run(
         row(label="primary, slot 2"),
         row(public_id=PUB2, private_id=PRIV2, aes_key=K2, password="", active="0", accessed=""),

@@ -515,7 +515,8 @@ Adds to spec §25 and §27.
   `updated_by_user_id`); the application holds the defaults and validation.
 - Audit events: `SETTING_CHANGED`, `GROUP_CREATED`, `GROUP_UPDATED`,
   `GROUP_DELETED`, `GROUP_MEMBER_ADDED`, `GROUP_MEMBER_REMOVED`,
-  `RADIATOR_EXPORT_CREATED`, `RADIATOR_IMPORT_COMPLETED`.
+  `RADIATOR_EXPORT_CREATED`, `RADIATOR_IMPORT_COMPLETED`, `LOGOUT` and
+  `ACCESS_DENIED` (section 17.4).
 - Encrypted values (spec §25.4's `encrypted_private_id`, `encrypted_aes_secret`
   and their nonces) are each stored as one self-describing value instead of a
   value and a nonce column: version, master key ID, nonce, ciphertext and tag.
@@ -541,7 +542,7 @@ Adds to spec §25 and §27.
 | 12 | VIP must test the pre-provisioned key at first login | Yes |
 | 13 | Migrated keys without counters | Need a fresh OTP before use, unless an admin accepts the risk (spec §38). Keys from a radiator-yubikey export always carry counters. |
 | 14 | Audit retention | Kept indefinitely; no automatic purge |
-| 15 | Audit copy outside the database | Also written to the system journal |
+| 15 | Audit copy outside the database | Also written to the system journal (section 17.6) |
 | 16 | External API | No |
 | 17 | PIN rule | Spec §12's password rule, plus section 2.6 |
 
@@ -616,6 +617,14 @@ live connector (section 11) carries removals.
 | 2026-10-18 | Hard delete is confirmed by entering the username (typed or pasted) | 16.6 |
 | 2026-10-18 | Each reveal needs its own step-up; one can reveal both values; shown for 60 seconds | 16.7 |
 | 2026-10-18 | Accounts get an optional display name and comment, for admins only | 12, 16.9 |
+| 2026-10-18 | Audit events can't be changed or deleted, also refused by database triggers | 17.1 |
+| 2026-10-19 | Backup and restore aren't hindered by the audit triggers or by permissions: a restore rewrites the audit log in one transaction, with no table ownership needed | 17.1 |
+| 2026-10-18 | The audit log page: search, filters, an account's events by ID, a page per event | 17.3 |
+| 2026-10-18 | New events: `LOGOUT`, `ACCESS_DENIED`; a refused OTP on the PIN page is recorded | 17.4 |
+| 2026-10-18 | Reveal events record whether a step-up confirmed them | 17.5 |
+| 2026-10-18 | The journal copy is apart from the application's log (`yk-portal-audit`, authpriv), at any log level, from the commands too | 17.6 |
+| 2026-10-18 | A temporary password typed as the username isn't named in the audit log | 17.7 |
+| 2026-10-19 | A PIN typed as the username is named if it is a valid username: unknown usernames tried must be visible | 17.7 |
 
 ---
 
@@ -684,3 +693,76 @@ own pages, and they aren't exported to Radiator. Both are plain text,
 escaped on output, without control characters (beyond the comment's line
 breaks and tabs). A change is an `ACCOUNT_UPDATED` event naming the field,
 never its value, as for the email address (spec §26).
+
+---
+
+## 17. Audit
+
+Adds to spec §9, §25.6, §27, §35 and §40 (spec Phase 7).
+
+17.1 Audit events are immutable (spec §9). The application refuses to
+change or delete one, and on both SQLite and PostgreSQL, database triggers
+refuse `UPDATE` and `DELETE` on `audit_events` for SQL that goes around
+it. A hard delete keeps the account's events (spec §26). `TRUNCATE` and
+dropping the table need the table's owner and aren't blocked; the journal
+copy (17.6) is the record that outlives them.
+
+Backup and restore (spec Phase 9) are not hindered by immutability or by
+permissions. No privilege on `audit_events` is granted or revoked: it is a
+table like the others, and a backup reads it. A restore rewrites it inside
+`yk_portal.audit.immutability.rewritable()`, which lets the model and the
+triggers change and delete events for that one transaction: on PostgreSQL
+through a transaction-local setting (`yk_portal.audit_rewrite`), which
+needs no table ownership or other privilege beyond writing the table; on
+SQLite by dropping the triggers and creating them again in the same
+transaction. A failed restore rolls back with the triggers in place.
+Nothing but a restore uses it. Django's JSON serializer keeps only
+milliseconds of a time, so the backup format must keep microseconds.
+
+17.2 Events are kept indefinitely (section 13, item 14): nothing in
+yk-portal purges them.
+
+17.3 The Audit log page (`/admin/audit/`, for admins) lists events newest
+first, 50 a page, with times in UTC. Its search matches the actor's and
+the target's usernames as they were at the time, the details (such as
+public IDs, group and setting names, and reasons), and an IP address typed
+in any form. Filters: event type, result, and a From and To date (UTC days,
+both included). An account's page links to the account's events as actor
+or target, found by account ID, so they're found after a rename or a hard
+delete. Each event has a page showing every field, with links to the
+accounts that still exist. The pages aren't cached; reading them isn't
+audited.
+
+17.4 Events added to spec §27:
+
+- `LOGOUT` when a user signs out;
+- `ACCESS_DENIED`, a failure, when a signed-in account without the admin
+  role opens or posts to an admin page; it names the method and path,
+  never the query string;
+- a failed `PASSWORD_CHANGED` when the PIN page (section 2.15) refuses the
+  OTP, for example a replayed one, with the reason. It doesn't count toward
+  lockout.
+
+A failed step-up was already recorded as `LOGIN_FAILURE` ("step-up: ...",
+section 16.7); it now carries the admin's session, as every event from a
+page does.
+
+17.5 `YUBIKEY_PRIVATE_ID_REVEALED` and `YUBIKEY_AES_SECRET_REVEALED`
+record `step_up`: whether the admin's PIN and OTP were checked for that
+reveal, false when the step-up setting is off (section 3.2).
+
+17.6 Once its transaction commits, each event is written to the local
+syslog socket, which the system journal reads, as `yk-portal-audit` with
+the authpriv facility: apart from the application's own log (standard
+error), whatever the configured log level, and from the commands as from
+the web application (`journalctl -t yk-portal-audit`). A line holds the
+event type, event ID, actor, target, source IP, result and details. Until
+now the commands printed these lines on standard error, and a log level
+above INFO dropped them.
+
+17.7 A username typed at sign-in that matches no account is named in the
+audit log only if it could be a username (as before) and doesn't have the
+form of a temporary password, which is also a valid username: a temporary
+password typed into the username box isn't recorded. A PIN typed there is
+recorded if it happens to be a valid username, as sshd logs "Invalid user"
+names: mistakes happen, and attempts at unknown usernames must be visible.

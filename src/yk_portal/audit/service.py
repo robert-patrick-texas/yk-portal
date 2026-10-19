@@ -1,9 +1,9 @@
 """Recording audit events (spec §27).
 
-Each event is stored in audit_events and, once the transaction commits,
-copied to the yk_portal.audit logger, which production sends to the system
-journal (addendum §13 item 15). Immutability and the admin viewer come with
-spec Phase 7.
+Each event is stored in audit_events, where it can't be changed or deleted,
+and once the transaction commits, copied to the yk_portal.audit logger,
+which production sends to the system journal apart from the application's
+own log (spec §40; addendum §13 item 15, §17.6).
 """
 
 import getpass
@@ -80,7 +80,8 @@ def record(
         details=dict(details or {}),
     )
     line = (
-        f"{event_type} actor={actor.name} target={event.target_username_snapshot or '-'} "
+        f"{event_type} id={event.pk} actor={actor.name or '-'} "
+        f"target={event.target_username_snapshot or '-'} ip={actor.source_ip or '-'} "
         f"result={result} details={json.dumps(event.details, sort_keys=True)}"
     )
     transaction.on_commit(lambda: logger.info("%s", line))

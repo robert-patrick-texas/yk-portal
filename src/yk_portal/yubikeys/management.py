@@ -17,7 +17,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from yk_portal.accounts.models import AccountState, User
-from yk_portal.audit.models import EventType
+from yk_portal.audit.models import EventType, Result
 from yk_portal.audit.service import Actor, record
 from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import PinHashes, hash_pin, validate_pin
@@ -199,19 +199,25 @@ def change_pin(
     Raises:
         ValidationError: The PIN breaks the policy, or the OTP comes from another
             YubiKey.
-        OtpRejected: As for check_yubikey; nothing counts toward lockout.
+        OtpRejected: As for check_yubikey; nothing counts toward lockout, but a failed
+            PASSWORD_CHANGED is recorded (addendum §17.4).
     """
     validate_pin(pin)  # before the OTP is used up
-    otp = parse_otp(otp_text.strip())
-    if otp.public_id != credential.public_id:
-        raise ValidationError(
-            "That OTP comes from another YubiKey. Touch this one.", code="other_yubikey"
-        )
-    with transaction.atomic():
-        accept_otp(find_credential(credential.user, otp.public_id), otp)
-        user = credential.user
-        keys = list(YubikeyCredential.objects.filter(user=user)) if everywhere else [credential]
-        set_pin(user, keys, pin, actor)
+    user = credential.user
+    try:
+        otp = parse_otp(otp_text.strip())
+        if otp.public_id != credential.public_id:
+            raise ValidationError(
+                "That OTP comes from another YubiKey. Touch this one.", code="other_yubikey"
+            )
+        with transaction.atomic():
+            accept_otp(find_credential(user, otp.public_id), otp)
+            keys = list(YubikeyCredential.objects.filter(user=user)) if everywhere else [credential]
+            set_pin(user, keys, pin, actor)
+    except OtpRejected as e:
+        details = {"public_id": credential.public_id, "reason": e.reason.value}
+        record(EventType.PASSWORD_CHANGED, actor, user, details=details, result=Result.FAILURE)
+        raise
     credential.refresh_from_db()
 
 
@@ -322,27 +328,28 @@ def remove_yubikey(credential: YubikeyCredential, actor: Actor, allow_last: bool
         record(EventType.YUBIKEY_REMOVED, actor, user, details=details)
 
 
-def reveal_private_id(credential: YubikeyCredential, actor: Actor) -> str:
-    """The private ID as hex, for an admin, audited (spec §20.2). Never logged."""
+def reveal_private_id(credential: YubikeyCredential, actor: Actor, *, step_up: bool) -> str:
+    """The private ID as hex, for an admin, audited (spec §20.2). Never logged.
+
+    Args:
+        step_up: Whether the admin's PIN and OTP were checked for this reveal, as the
+            event records (addendum §17.5).
+    """
     _require_admin(actor)
-    record(
-        EventType.YUBIKEY_PRIVATE_ID_REVEALED,
-        actor,
-        credential.user,
-        details={"public_id": credential.public_id},
-    )
+    details = {"public_id": credential.public_id, "step_up": step_up}
+    record(EventType.YUBIKEY_PRIVATE_ID_REVEALED, actor, credential.user, details=details)
     return credential.private_id().hex()
 
 
-def reveal_aes_key(credential: YubikeyCredential, actor: Actor) -> str:
-    """The AES key as hex, for an admin, audited (spec §20.2). Never logged."""
+def reveal_aes_key(credential: YubikeyCredential, actor: Actor, *, step_up: bool) -> str:
+    """The AES key as hex, for an admin, audited (spec §20.2). Never logged.
+
+    Args:
+        step_up: As for reveal_private_id.
+    """
     _require_admin(actor)
-    record(
-        EventType.YUBIKEY_AES_SECRET_REVEALED,
-        actor,
-        credential.user,
-        details={"public_id": credential.public_id},
-    )
+    details = {"public_id": credential.public_id, "step_up": step_up}
+    record(EventType.YUBIKEY_AES_SECRET_REVEALED, actor, credential.user, details=details)
     return credential.aes_key().hex()
 
 

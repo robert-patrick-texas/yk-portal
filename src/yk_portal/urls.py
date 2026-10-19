@@ -3,6 +3,7 @@ from django.urls import URLPattern, URLResolver, path
 from yk_portal.accounts import admin_views as admin_users
 from yk_portal.accounts import group_views as admin_groups
 from yk_portal.accounts import views as accounts
+from yk_portal.audit import views as admin_audit
 from yk_portal.authentication import views as authentication
 from yk_portal.portal_settings import views as admin_settings
 from yk_portal.web import views as web
@@ -39,7 +40,7 @@ urlpatterns: list[URLPattern | URLResolver] = [
         name="yubikey-disable",
     ),
     path("account/yubikeys/<uuid:credential_id>/remove/", yubikeys.remove, name="yubikey-remove"),
-    # Admin pages (spec §9, §14, §20; addendum §3, §5)
+    # Admin pages (spec §9, §14, §20, §35; addendum §3, §5, §17)
     path("admin/users/", admin_users.users, name="admin-users"),
     path("admin/users/new/", admin_users.create, name="admin-user-new"),
     path(USER, admin_users.detail, name="admin-user"),
@@ -85,4 +86,6 @@ urlpatterns: list[URLPattern | URLResolver] = [
         name="admin-group-member-remove",
     ),
     path("admin/settings/", admin_settings.settings_page, name="admin-settings"),
+    path("admin/audit/", admin_audit.events, name="admin-audit"),
+    path("admin/audit/<uuid:event_id>/", admin_audit.event, name="admin-audit-event"),
 ]

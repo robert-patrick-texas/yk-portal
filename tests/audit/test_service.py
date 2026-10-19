@@ -35,13 +35,27 @@ def test_events_outlive_the_user(make_user, actor):
     assert event.target_username_snapshot == "alice"
 
 
-def test_committed_events_are_copied_to_the_log(actor, caplog, django_capture_on_commit_callbacks):
+def test_committed_events_are_copied_to_the_log(
+    make_user, caplog, django_capture_on_commit_callbacks
+):
+    alice = make_user("alice")
+    actor = Actor(user=make_user("boss", admin=True), name="boss", source_ip="192.0.2.7")
     with caplog.at_level(logging.INFO, logger="yk_portal.audit"):
         with django_capture_on_commit_callbacks(execute=True):
-            record(EventType.SETTING_CHANGED, actor, details={"setting": "x", "new": 2})
+            event = record(EventType.ACCOUNT_UPDATED, actor, alice, details={"n": 2, "a": "x"})
     assert caplog.messages == [
-        f"SETTING_CHANGED actor={actor.name} target=- result=SUCCESS "
-        'details={"new": 2, "setting": "x"}'
+        f"ACCOUNT_UPDATED id={event.pk} actor=boss target=alice ip=192.0.2.7 result=SUCCESS "
+        'details={"a": "x", "n": 2}'
+    ]
+
+
+def test_the_log_line_marks_what_is_missing(caplog, django_capture_on_commit_callbacks):
+    anonymous = Actor(user=None, name="")
+    with caplog.at_level(logging.INFO, logger="yk_portal.audit"):
+        with django_capture_on_commit_callbacks(execute=True):
+            event = record(EventType.LOGIN_FAILURE, anonymous, result=Result.FAILURE)
+    assert caplog.messages == [
+        f"LOGIN_FAILURE id={event.pk} actor=- target=- ip=- result=FAILURE details={{}}"
     ]
 
 

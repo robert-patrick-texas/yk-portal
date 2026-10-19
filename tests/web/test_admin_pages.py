@@ -229,7 +229,7 @@ def test_edit_an_account(client, root, alice, actor):
     noc = group_service.create_group("noc", actor)
     ops = group_service.create_group("ops", actor)
     group_service.add_member(noc, alice, actor)
-    AuditEvent.objects.all().delete()
+    before = list(AuditEvent.objects.values_list("pk", flat=True))
     response = client.post(
         reverse("admin-user-edit", args=[alice.pk]),
         {"username": "alicia", "email": "alicia@example.com", "groups": [str(ops.pk)]},
@@ -238,7 +238,8 @@ def test_edit_an_account(client, root, alice, actor):
     alice.refresh_from_db()
     assert (alice.username, alice.email) == ("alicia", "alicia@example.com")
     assert list(alice.groups.all()) == [ops]
-    assert sorted(AuditEvent.objects.values_list("event_type", flat=True)) == [
+    after = AuditEvent.objects.exclude(pk__in=before)
+    assert sorted(after.values_list("event_type", flat=True)) == [
         EventType.ACCOUNT_UPDATED,
         EventType.GROUP_MEMBER_ADDED,
         EventType.GROUP_MEMBER_REMOVED,

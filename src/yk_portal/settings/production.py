@@ -33,11 +33,19 @@ YK_TRUSTED_PROXIES = YK_CONFIG.trusted_proxy_addresses
 # one else can set that header.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# Standard error goes to the systemd journal. Separate audit logging comes
-# with the audit service (spec §40).
+# The application's log goes to standard error, which systemd sends to the
+# journal. Audit events go to the journal on their own, as yk-portal-audit,
+# whatever the configured level and whoever runs the command (spec §40;
+# addendum §17.6).
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"stderr": {"class": "logging.StreamHandler"}},
+    "handlers": {
+        "stderr": {"class": "logging.StreamHandler"},
+        "journal": {"()": "yk_portal.audit.journal.journal_handler"},
+    },
     "root": {"handlers": ["stderr"], "level": YK_CONFIG.log_level},
+    "loggers": {
+        "yk_portal.audit": {"handlers": ["journal"], "level": "INFO", "propagate": False},
+    },
 }

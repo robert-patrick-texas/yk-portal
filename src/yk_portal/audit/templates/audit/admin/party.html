@@ -1,0 +1,1 @@
+{% if user_id %}{% if user_id in existing %}<a href="{% url 'admin-user' user_id %}">{{ name|default:user_id }}</a>{% else %}{{ name|default:user_id }} <span class="tag">deleted</span>{% endif %} · <a href="{% url 'admin-audit' %}?user={{ user_id }}">events of this account</a>{% else %}{{ name|default:"—" }}{% endif %}

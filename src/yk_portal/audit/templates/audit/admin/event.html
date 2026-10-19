@@ -1,0 +1,20 @@
+{% extends "web/base.html" %}
+{% block title %}{{ event.event_type }} · {% endblock %}
+{% block content %}
+<p><a href="{% url 'admin-audit' %}">Audit log</a></p>
+<div class="heading-row">
+  <h1><code>{{ event.event_type }}</code>{% if event.result == "FAILURE" %} <span class="tag failure">failed</span>{% endif %}</h1>
+</div>
+<dl class="facts">
+  <dt>Time</dt><dd>{{ event.timestamp|date:"Y-m-d H:i:s.u" }} UTC</dd>
+  <dt>Result</dt><dd>{{ event.get_result_display }}</dd>
+  <dt>Actor</dt><dd>{% include "audit/admin/party.html" with name=event.actor_username_snapshot user_id=event.actor_user_id %}</dd>
+  <dt>Target</dt><dd>{% include "audit/admin/party.html" with name=event.target_username_snapshot user_id=event.target_user_id %}</dd>
+  <dt>IP address</dt><dd>{{ event.source_ip|default:"—" }}</dd>
+  <dt>Session</dt><dd>{% if event.session_id %}<code>{{ event.session_id }}</code>{% else %}—{% endif %}</dd>
+  <dt>Event ID</dt><dd><code>{{ event.pk }}</code></dd>
+  {% for key, value in event.detail_items %}
+  <dt>{{ key }}</dt><dd class="wrap">{{ value }}</dd>
+  {% endfor %}
+</dl>
+{% endblock %}

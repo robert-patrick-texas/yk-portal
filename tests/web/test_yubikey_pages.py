@@ -5,6 +5,7 @@ from django.urls import reverse
 
 from yk_portal.accounts import services
 from yk_portal.accounts.models import AccountState, User
+from yk_portal.audit.models import AuditEvent, EventType, Result
 from yk_portal.audit.service import Actor
 from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import check_web_password
@@ -13,6 +14,7 @@ from yk_portal.authentication.sessions import Client as SessionClient
 from yk_portal.portal_settings import service as portal_settings
 from yk_portal.yubikeys.management import NewYubikey, add_yubikey
 from yk_portal.yubikeys.models import ProvisioningMethod, YubikeyCredential
+from yk_portal.yubikeys.otp import Rejection
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("master_key")]
 
@@ -235,6 +237,27 @@ def test_a_refused_pin_change(client, alice, spare, otp, form, message):
     assert message in page
     spare.refresh_from_db()
     assert not spare.has_pin
+
+
+@pytest.mark.parametrize(
+    ("otp_text", "reason"),
+    [
+        (lambda otp: otp(3, aes_key=K2), Rejection.BAD_CRC),
+        (lambda otp: otp(2), Rejection.REPLAYED),
+    ],
+)
+def test_a_refused_otp_on_the_pin_page_is_recorded(client, alice, spare, otp, otp_text, reason):
+    """Addendum §17.4: a refused proof is recorded, though it doesn't count to lockout."""
+    YubikeyCredential.objects.filter(pk=spare.pk).update(last_usage_counter=2)
+    session = Session.objects.get(user=alice)
+    client.post(reverse("yubikey-pin", args=[spare.pk]), pin_form(otp_text(otp)))
+    event = AuditEvent.objects.get()
+    assert (event.event_type, event.result) == (EventType.PASSWORD_CHANGED, Result.FAILURE)
+    assert event.details == {"public_id": PUBLIC_ID, "reason": reason.value}
+    assert (event.actor_user_id, event.target_user_id) == (alice.pk, alice.pk)
+    assert (event.source_ip, event.session_id) == ("127.0.0.1", session.pk)
+    spare.refresh_from_db()
+    assert not spare.has_pin and spare.failed_login_count == 0
 
 
 def test_a_pin_change_needs_an_otp_from_that_key(client, alice, spare, make_otp):

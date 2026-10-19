@@ -9,6 +9,7 @@ Both come from the same PIN (addendum §2.3). Temporary passwords get only the
 Argon2id hash (addendum §2.5).
 """
 
+import re
 import secrets
 import unicodedata
 from dataclasses import dataclass, field
@@ -85,6 +86,11 @@ def validate_pin(pin: str) -> None:
         )
     if errors:
         raise ValidationError(errors)
+
+
+def looks_like_temporary_password(text: str) -> bool:
+    """Whether TEXT has the form of a generated temporary password."""
+    return re.fullmatch(r"[a-z0-9]{4}(?:-[a-z0-9]{4}){3}", text) is not None
 
 
 def generate_temporary_password() -> str:

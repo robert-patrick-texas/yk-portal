@@ -399,7 +399,7 @@ def test_delete_user(actor, make_user, make_credential):
     add_member(create_group("noc", actor), user, actor)
     portal_settings.update({"portal_name": "NOC"}, Actor.for_user(user))
     start_session(user, Client("127.0.0.1", "pytest"))
-    AuditEvent.objects.all().delete()
+    before = list(AuditEvent.objects.values_list("pk", flat=True))
 
     assert services.delete_user(user, Actor.for_user(admin)) == keys
     assert not User.objects.filter(pk=user.pk).exists()
@@ -407,7 +407,8 @@ def test_delete_user(actor, make_user, make_credential):
     assert not Session.objects.filter(user_id=user.pk).exists()
     assert YubikeyCredential.objects.get(pk=made_by_alice.pk).created_by is None
     # The audit log keeps the former ID and username, never the email address (spec §26).
-    audit = AuditEvent.objects.get()
+    assert AuditEvent.objects.count() == len(before) + 1
+    audit = AuditEvent.objects.exclude(pk__in=before).get()
     assert audit.event_type == EventType.ACCOUNT_DELETED
     assert (audit.target_user_id, audit.target_username_snapshot) == (user.pk, "alice")
     assert audit.details == {"state": A, "public_ids": keys}

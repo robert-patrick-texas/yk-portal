@@ -7,6 +7,8 @@ from django.utils import timezone
 
 from yk_portal.accounts import services
 from yk_portal.accounts.models import AccountState, User
+from yk_portal.audit.models import AuditEvent, EventType
+from yk_portal.audit.service import Actor
 from yk_portal.authentication.models import Session
 from yk_portal.authentication.sessions import (
     Client,
@@ -90,10 +92,19 @@ def test_activity_is_recorded_at_most_once_a_minute(make_user):
     )
 
 
-def test_end_session(make_user):
-    session, token = start_session(make_user(), CLIENT)
-    end_session(session)
+def test_end_session_records_a_logout(make_user):
+    user = make_user()
+    session, token = start_session(user, CLIENT)
+    actor = Actor(user, user.username, CLIENT.source_ip, session.pk)
+    end_session(session, actor)
+    end_session(session, actor)  # already ended: no second event
     assert find_session(token, DEFAULTS) is None
+    event = AuditEvent.objects.get()
+    assert (event.event_type, event.target_user_id, event.session_id) == (
+        EventType.LOGOUT,
+        user.pk,
+        session.pk,
+    )
 
 
 @pytest.mark.parametrize("state", [AccountState.LOCKED, AccountState.DISABLED])
@@ -135,7 +146,7 @@ def test_purge_deletes_only_ended_sessions(make_user):
     alice, bob = make_user(), make_user()
     live = [start_session(alice, CLIENT)[0], start_session(bob, CLIENT)[0]]
     revoked, idle, old = (start_session(user, CLIENT)[0] for user in (alice, bob, bob))
-    end_session(revoked)
+    end_session(revoked, Actor.cli())
     age(idle, idle=timedelta(minutes=20))
     age(old, old=timedelta(hours=12))
     assert purge_ended_sessions(DEFAULTS) == 3
