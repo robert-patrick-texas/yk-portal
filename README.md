@@ -249,3 +249,7 @@ A backup restores into either backend. To move from SQLite to PostgreSQL:
 | `tests/` | Tests (pytest with pytest-django), run on both backends |
 | `scripts/check` | Every check, and the tests on SQLite and PostgreSQL |
 | `scripts/build_pages.py`, `.github/workflows/pages.yml` | The documents as a website, on GitHub Pages |
+
+## License
+
+[MIT](LICENSE).

@@ -2,6 +2,8 @@
 name = "yk-portal"
 version = "0.1.0"
 description = "Web portal to manage user accounts and YubiKey OTP credentials, alongside radiator-yubikey"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Robert Patrick", email = "193846785+robert-patrick-texas@users.noreply.github.com" }
 ]
