@@ -11,7 +11,7 @@ which provides offline YubiKey OTP logins for Radiator RADIUS. yk-portal
 exports its accounts in radiator-yubikey's CSV format, and imports and
 syncs counters from it. It never changes radiator-yubikey itself.
 
-**Status:** spec Phases 1 to 7 done: configuration file, master key,
+**Status:** spec Phases 1 to 8 done: configuration file, master key,
 AES-256-GCM encryption, Argon2id and SHA-512 crypt hashing; accounts and
 their states, temporary passwords, roles with last-admin protection, groups,
 the database-backed settings and audit events, and the `bootstrap-admin`,
@@ -26,8 +26,9 @@ display name and comment for admins, disable, enable, unlock, reset to
 provisioning, temporary passwords, the admin role, hard delete; any account's YubiKeys: pre-provision, edit, set
 the PIN, disable, remove, reveal the secrets after a step-up; groups;
 settings); the audit log, whose events can't be changed or deleted, with
-its admin page and its copy in the system journal. PostgreSQL parity
-(spec Phase 8) comes next.
+its admin page and its copy in the system journal; PostgreSQL alongside
+SQLite, alike in behavior and schema, with `database-status`. Backup and
+restore (spec Phase 9) come next.
 
 ## Documents
 
@@ -41,12 +42,14 @@ its admin page and its copy in the system journal. PostgreSQL parity
 - Ubuntu 26.04 LTS
 - Python 3.14.4 or newer
 - [uv](https://docs.astral.sh/uv/) 0.13.1 or newer
-- `libpq5` for PostgreSQL (used by `psycopg`)
+- for PostgreSQL: PostgreSQL 14 or newer (tested with 18), and `libpq5`
+  (used by `psycopg`)
 
 ## Development
 
 ```bash
 uv sync                                          # create .venv with every dependency
+scripts/check                                    # every check below, before a commit
 uv run pytest                                    # tests, on SQLite
 YK_PORTAL_TEST_DATABASE=postgresql uv run pytest # the same tests, on PostgreSQL
 uv run ruff check .                              # lint
@@ -54,10 +57,12 @@ uv run ruff format .                             # format
 uv run ty check                                  # type check
 ```
 
-The PostgreSQL run connects with the usual libpq defaults and environment
+Both test runs use the production database settings (addendum §18.7). The
+SQLite run keeps its database in a file in the temporary directory. The
+PostgreSQL run connects with the usual libpq defaults and environment
 (`PGHOST`, `PGUSER`, ...) as a role that may create databases; it creates and
-drops `test_yk_portal`. It also runs the test that submits one OTP from
-several threads at once.
+drops `test_yk_portal` (and `test_yk_portal_from_models`, for the schema
+check).
 
 `tests/yubikeys/test_radiator_crosscheck.py` checks OTP verdicts and stored
 counters against radiator-yubikey's `tests/make-otp.sh` and `yubikey-db.sh
@@ -98,6 +103,49 @@ sudo -u yk-portal yk-portal bootstrap-admin            # the first admin; prints
 Django's secret key is derived from the master key, so nothing starts
 without it. Packaging, the service account and systemd come in spec Phase 10.
 
+`yk-portal database-status` shows which database is in use and whether it is
+ready; it exits with status 1 if not (addendum §18.6).
+
+### PostgreSQL
+
+SQLite suits a single server. For PostgreSQL (addendum §18.2), give
+yk-portal a role of its own that owns its database and has no other
+privileges, and a UTF-8 database with the `C.UTF-8` locale:
+
+```bash
+sudo -u postgres psql <<'SQL'
+CREATE ROLE yk_portal LOGIN;
+CREATE DATABASE yk_portal OWNER yk_portal
+    ENCODING 'UTF8' LOCALE 'C.UTF-8' TEMPLATE template0;
+REVOKE ALL ON DATABASE yk_portal FROM PUBLIC;
+SQL
+sudo -u postgres psql -c '\password yk_portal'   # prompts, so it stays out of shell history
+```
+
+Put the password in a passfile that only the service account can read, and
+name it in the connection string, with TLS across the network:
+
+```bash
+sudo install -m 0600 -o yk-portal -g yk-portal /dev/null /etc/yk-portal/pgpass
+sudoedit /etc/yk-portal/pgpass   # one line: db.example.com:5432:yk_portal:yk_portal:PASSWORD
+```
+
+```toml
+[database]
+backend = "postgresql"
+postgres_dsn = "host=db.example.com dbname=yk_portal user=yk_portal sslmode=verify-full sslrootcert=/etc/yk-portal/db-ca.crt passfile=/etc/yk-portal/pgpass"
+```
+
+On the same server, peer authentication over the Unix socket needs no
+password: name the role after the service account (`CREATE ROLE "yk-portal"
+LOGIN`, owning the database) and use `postgres_dsn = "dbname=yk_portal
+user=yk-portal"`. Then:
+
+```bash
+sudo -u yk-portal yk-portal migrate
+sudo -u yk-portal yk-portal database-status
+```
+
 ## Audit log
 
 Every security-sensitive action records an audit event (spec §27; addendum
@@ -121,6 +169,8 @@ audit event naming the operating-system user (and the `sudo` caller).
 
 | Command | What it does |
 |---|---|
+| `database-status` | Shows the database in use (backend, version, file or server, role, TLS, locale), whether its migrations are applied and its audit log protected; exits with status 1 on a problem. Warnings, such as a role with privileges it doesn't need, don't change the status |
+| `migrate` | Creates or updates the database's tables (spec §36's `database-migrate`) |
 | `bootstrap-admin [USERNAME]` | Creates the first admin account; refused once any admin exists. Prompts for the username if it isn't given |
 | `create-admin USERNAME [--email EMAIL]` | Creates another admin account |
 | `reset-admin USERNAME` | Gives an admin account a new temporary password and puts it in PROVISIONING: the way back in when no admin can sign in |
@@ -154,7 +204,7 @@ sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal 
 | Path | Responsibility |
 |---|---|
 | `src/yk_portal/settings/` | Django settings: `base`, `dev`, `test`, `production` |
-| `src/yk_portal/core/` | Configuration, master key, AES-256-GCM encryption, SHA-512 crypt |
+| `src/yk_portal/core/` | Configuration, master key, AES-256-GCM encryption, SHA-512 crypt; where SQLite and PostgreSQL differ (`db.py`), and `database-status` |
 | `src/yk_portal/accounts/` | Users, roles, account states, groups; onboarding and the admin user and group pages |
 | `src/yk_portal/authentication/` | Login, PINs and temporary passwords, lockout, sessions, step-up |
 | `src/yk_portal/yubikeys/` | YubiKey credentials, OTP validation, replay counters; the users' and admins' YubiKey pages |
@@ -163,4 +213,5 @@ sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal 
 | `src/yk_portal/radiator/` | Export to and import from radiator-yubikey |
 | `src/yk_portal/backup/` | Encrypted backup and restore |
 | `src/yk_portal/web/` | Shared page layout, light and dark themes, static files |
-| `tests/` | Tests (pytest with pytest-django) |
+| `tests/` | Tests (pytest with pytest-django), run on both backends |
+| `scripts/check` | Every check, and the tests on SQLite and PostgreSQL |

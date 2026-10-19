@@ -17,6 +17,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from yk_portal.audit.service import Actor
 from yk_portal.authentication.access import admin_required
 from yk_portal.authentication.sessions import PortalRequest, request_actor
+from yk_portal.core.db import CodePoint
 from yk_portal.yubikeys.models import YubikeyCredential
 
 from . import groups, services
@@ -54,7 +55,7 @@ def users(request: PortalRequest) -> HttpResponse:
     found = (
         found.annotate(yubikey_count=Count("yubikeys", distinct=True))
         .prefetch_related("groups")
-        .order_by("username")
+        .order_by(CodePoint("username"))
     )
     page = Paginator(found, PAGE_SIZE).get_page(request.GET.get("page"))
     return render(request, "accounts/admin/users.html", {"form": form, "page": page})
@@ -124,7 +125,7 @@ def _detail(request: PortalRequest, user: User, error: str = "") -> HttpResponse
         {
             "user": user,
             "is_admin": user.is_admin,
-            "user_groups": user.groups.order_by("name"),
+            "user_groups": user.groups.order_by(CodePoint("name")),
             "credentials": credentials,
             "can_add": len(credentials) < request.portal_settings.max_yubikeys_per_user,
             "error": error,

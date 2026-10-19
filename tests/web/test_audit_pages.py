@@ -173,6 +173,18 @@ def test_search_and_filters(client, root, history, query, expected):
     assert listed(html) == expected
 
 
+@pytest.mark.parametrize("q", ["Clé", "clé", "CLÉ DE"])
+def test_search_finds_any_letters_in_the_details(client, root, actor, q):
+    """Labels and text settings hold any letters: found on SQLite as on PostgreSQL, in any
+    case (addendum §18.3)."""
+    details = {"public_id": "vvccccbbcdef", "old_label": "", "new_label": "Clé de secours"}
+    record(EventType.YUBIKEY_UPDATED, actor, details=details)
+    record(EventType.YUBIKEY_UPDATED, actor, details={"new_label": "Cle"})
+    html = page(client.get(reverse("admin-audit"), {"q": q}))
+    assert listed(html) == ["YUBIKEY_UPDATED"]
+    assert "Clé de secours" in page(client.get(reverse("admin-audit"), {"q": "secours"}))
+
+
 def test_dates_out_of_order_are_an_error(client, root, history):
     html = page(client.get(reverse("admin-audit") + "?since=2026-10-03&until=2026-10-01"))
     assert "The From date is after the To date." in html

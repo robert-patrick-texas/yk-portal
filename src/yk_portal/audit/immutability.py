@@ -16,6 +16,12 @@ from contextvars import ContextVar
 
 from django.db import DEFAULT_DB_ALIAS, connections, transaction
 
+# The triggers migration 0004 creates, by backend; database-status checks for them.
+TRIGGERS = {
+    "sqlite": {"audit_events_no_update", "audit_events_no_delete"},
+    "postgresql": {"audit_events_immutable"},
+}
+
 _rewriting: ContextVar[bool] = ContextVar("audit_rewriting", default=False)
 
 

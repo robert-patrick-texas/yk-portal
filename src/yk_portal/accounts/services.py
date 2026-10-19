@@ -22,6 +22,7 @@ from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
 from yk_portal.authentication.passwords import generate_temporary_password, hash_web_password
 from yk_portal.authentication.sessions import revoke_sessions
+from yk_portal.core.db import recheck_on_conflict
 from yk_portal.portal_settings.service import current as current_settings
 from yk_portal.yubikeys.models import YubikeyCredential
 
@@ -29,6 +30,7 @@ from .models import AccountState, Group, Role, User
 from .validators import validate_username
 
 # The admin-only fields (addendum §16.9).
+EMAIL_LENGTH = 254  # RFC 5321's limit, and the column's; Django's validator allows 320
 DISPLAY_NAME_LENGTH = 255
 COMMENT_LENGTH = 1000
 
@@ -97,12 +99,14 @@ def bootstrap_admin(username: str, actor: Actor) -> NewAccount:
     Raises:
         ValidationError: An admin account already exists, or the username is invalid.
     """
-    if User.objects.filter(user_roles__role__name=Role.ADMIN).exists():
-        raise ValidationError(
-            "An admin account already exists; use create-admin to add another.",
-            code="admin_exists",
-        )
-    return _create(username, actor, "", True, None, EventType.ADMIN_BOOTSTRAPPED)
+    with transaction.atomic():
+        _lock_admins()  # so two at once can't both find no admin
+        if User.objects.filter(user_roles__role__name=Role.ADMIN).exists():
+            raise ValidationError(
+                "An admin account already exists; use create-admin to add another.",
+                code="admin_exists",
+            )
+        return _create(username, actor, "", True, None, EventType.ADMIN_BOOTSTRAPPED)
 
 
 def create_migrated_user(username: str, actor: Actor, source: str) -> User:
@@ -178,12 +182,12 @@ def _insert(
 ) -> User:
     """Insert an account with its roles and groups (None: the default group), and record
     EVENT. Call it in a transaction."""
-    if User.objects.filter(username=username).exists():
-        raise ValidationError("That username is taken.", code="username_taken")
+    _check_username_free(username)
     if groups is None:
         groups = Group.objects.filter(pk=current_settings().default_group)
     groups = list(groups)
-    user = User.objects.create(username=username, **fields)
+    with recheck_on_conflict(lambda: _check_username_free(username)):
+        user = User.objects.create(username=username, **fields)
     user.roles.add(*Role.objects.filter(name__in=roles))
     user.groups.add(*groups)
     record(
@@ -353,11 +357,11 @@ def change_username(user: User, username: str, actor: Actor) -> None:
     with _account(user) as account:
         if account.username == username:
             return
-        if User.objects.filter(username=username).exists():
-            raise ValidationError("That username is taken.", code="username_taken")
+        _check_username_free(username)
         old = account.username
         account.username = username
-        account.save()
+        with recheck_on_conflict(lambda: _check_username_free(username)):
+            account.save()
         record(
             EventType.USERNAME_CHANGED,
             actor,
@@ -482,6 +486,8 @@ def _account(
 
 def _clean_email(email: str) -> str:
     email = email.strip()
+    if len(email) > EMAIL_LENGTH:
+        raise ValidationError(f"Use at most {EMAIL_LENGTH} characters.", code="email_too_long")
     if email:
         validate_email(email)
     return email
@@ -519,9 +525,11 @@ def _clean_comment(comment: str) -> str:
 def _keep_an_admin(user: User) -> None:
     """Refuse if USER is the last enabled admin (spec §9.1). Call it in a transaction.
 
-    Every enabled admin is locked first, in ID order, so two admins changing each
-    other at once queue instead of both passing the check or deadlocking.
+    The admin role is locked first, so two changes at once that each leave another
+    admin queue instead of both passing the check; then every enabled admin, in ID
+    order, which also waits for a change to their state.
     """
+    _lock_admins()
     admins = list(
         enabled_admins().select_for_update(of=("self",)).order_by("pk").values_list("pk", flat=True)
     )
@@ -530,6 +538,19 @@ def _keep_an_admin(user: User) -> None:
             "This is the last enabled admin account; make another admin first.",
             code="last_admin",
         )
+
+
+def _lock_admins() -> None:
+    """Lock the admin role's row until the transaction ends, for changes that count
+    admins. On PostgreSQL, a query that waited for another transaction's lock on a user
+    wouldn't see the admin role that transaction removed (addendum §18.4); a query run
+    after this lock does. Accounts gaining the role aren't held up (no key update)."""
+    Role.objects.select_for_update(no_key=True).get(name=Role.ADMIN)
+
+
+def _check_username_free(username: str) -> None:
+    if User.objects.filter(username=username).exists():
+        raise ValidationError("That username is taken.", code="username_taken")
 
 
 def _keys(account: User) -> QuerySet[YubikeyCredential]:

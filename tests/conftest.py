@@ -6,6 +6,8 @@ import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from yk_portal.accounts.models import AccountState, Role, User
+from yk_portal.audit.immutability import rewritable
+from yk_portal.audit.models import AuditEvent
 from yk_portal.audit.service import Actor
 from yk_portal.authentication.passwords import hash_pin
 from yk_portal.core.master_key import create_master_key
@@ -14,6 +16,25 @@ from yk_portal.yubikeys.models import ProvisioningMethod, YubikeyCredential
 from yk_portal.yubikeys.otp import OtpRejected, Rejection, crc16
 
 _numbers = itertools.count(1)
+
+
+def pytest_report_header(config) -> str:
+    from django.conf import settings
+
+    return f"database: {settings.DATABASES['default']['ENGINE'].rsplit('.', 1)[1]}"
+
+
+@pytest.fixture(autouse=True)
+def _flushable_audit_log(request) -> Generator[None]:
+    """A transactional test ends by emptying every table, which SQLite does with DELETE:
+    the audit log's triggers refuse it, as they should (PostgreSQL's TRUNCATE passes
+    them, addendum §17.1). Empty the audit log first, as a restore would."""
+    marker = request.node.get_closest_marker("django_db")
+    transactional = marker is not None and marker.kwargs.get("transaction", False)
+    yield
+    if transactional or "transactional_db" in request.fixturenames:
+        with rewritable():
+            AuditEvent.objects.all().delete()
 
 
 @pytest.fixture

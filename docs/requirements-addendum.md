@@ -625,6 +625,11 @@ live connector (section 11) carries removals.
 | 2026-10-18 | The journal copy is apart from the application's log (`yk-portal-audit`, authpriv), at any log level, from the commands too | 17.6 |
 | 2026-10-18 | A temporary password typed as the username isn't named in the audit log | 17.7 |
 | 2026-10-19 | A PIN typed as the username is named if it is a valid username: unknown usernames tried must be visible | 17.7 |
+| 2026-10-19 | PostgreSQL: one dedicated role that owns the database and has no other privileges; UTF-8 with the C.UTF-8 locale; connections kept for 60 seconds, no pool | 18.2 |
+| 2026-10-19 | Both backends list in code-point order and search ignoring the case of every letter; audit details stored with their characters; lengths checked before writing | 18.3 |
+| 2026-10-19 | Changes at the same moment end as on SQLite: the admin role's row and the account's row are locked first, a value taken meanwhile is "taken", settings changes take turns | 18.4 |
+| 2026-10-19 | Tests check that the migrations build the models' schema on each backend, and undo and redo | 18.5 |
+| 2026-10-19 | `database-status` command; `migrate` is spec §36's `database-migrate` | 18.6 |
 
 ---
 
@@ -766,3 +771,101 @@ form of a temporary password, which is also a valid username: a temporary
 password typed into the username box isn't recorded. A PIN typed there is
 recorded if it happens to be a valid username, as sshd logs "Invalid user"
 names: mistakes happen, and attempts at unknown usernames must be visible.
+
+---
+
+## 18. PostgreSQL and the two backends
+
+Adds to spec §4.3, §30, §36, §44.6 and §48 (spec Phase 8).
+
+18.1 SQLite and PostgreSQL run the same code, models and migrations. Django
+5.2 supports PostgreSQL 14 and newer; yk-portal is tested with 18, Ubuntu
+26.04's, and with Ubuntu's SQLite (3.46).
+
+18.2 PostgreSQL setup (README, "PostgreSQL"):
+
+- one dedicated role, which owns yk-portal's database and has no other
+  privilege: not a superuser, no `CREATEDB`, `CREATEROLE`, `REPLICATION` or
+  `BYPASSRLS` (spec §30's least privilege). Owning the database lets
+  `yk-portal migrate` create and change the tables and the audit log's
+  triggers; no privilege on a single table is granted or revoked (section
+  17.1). A second role for migrations was not chosen: as the tables' owner,
+  the application's role could drop them anyway, and migrations would need a
+  second connection string;
+- `PUBLIC` loses `CONNECT` on the database, so other roles can't connect;
+- the database is UTF-8, created with the `C.UTF-8` locale, whose case
+  folding knows every letter (section 18.3);
+- the password is in a passfile, never in the configuration; across a
+  network, `sslmode=verify-full` (spec §30);
+- each worker keeps its connection for 60 seconds, checked before reuse, so
+  a request doesn't pay for a new connection and TLS handshake. No pool is
+  needed at the scale of spec §4.4. Connections show as `yk-portal` in
+  `pg_stat_activity`, unless the connection string names them otherwise.
+
+18.3 Where the backends behave differently, yk-portal makes them alike.
+`yk_portal.core.db` is the one place with backend-specific SQL, besides the
+audit log's triggers:
+
+- lists (accounts, groups, members) are in Unicode code-point order, as
+  SQLite sorts, whatever the PostgreSQL database's collation: `a-b`, `a.c`,
+  `ab`; `Zeta` before `alpha`;
+- searches ignore the case of every letter on SQLite too, whose `LIKE` folds
+  only ASCII letters: "émile" finds "Émile". PostgreSQL does it with a UTF-8
+  locale, which `database-status` checks;
+- audit details are stored with their characters as they are, not as `\u`
+  escapes, so the audit log's search finds "Clé" on SQLite too. Events
+  recorded before keep their escapes;
+- lengths are checked before writing, since SQLite stores a value longer
+  than its column where PostgreSQL refuses it: email addresses up to 254
+  characters (Django's own check allows 320), and YubiKey labels up to 255
+  in every path, not only the forms.
+
+18.4 Changes at the same moment. SQLite's writers take turns (IMMEDIATE
+transactions); PostgreSQL's run together, and a check one transaction makes
+can be overtaken by another. Where it changed the outcome, the outcome is
+now the same on both:
+
+- changes that count admins (removing the admin role, disabling, deleting,
+  `bootstrap-admin`) first lock the admin role's row: two admins removing
+  each other at once leave one (spec §9.1). Before, on PostgreSQL, both
+  could succeed; and two `bootstrap-admin` runs at once could make two
+  admins on either backend;
+- changes to an account's YubiKeys first lock the account, as a login does:
+  disabling or removing two YubiKeys at once can't take an ACTIVE account's
+  last one (section 14.3), and PIN changes can't deadlock;
+- a username, group name or YubiKey that another transaction takes at the
+  same moment gets the same "is taken" error as on SQLite, not an error
+  page;
+- settings changes take turns, so each `SETTING_CHANGED` records the value
+  it replaced;
+- `radiator-import` reports an account renamed or deleted while it ran as
+  "yk-portal changed during the import", like other changes.
+
+Tests run each of these in threads released together, on both backends.
+
+18.5 Migration parity: on each backend, tests check that the migrations
+build exactly the schema the models describe (tables, columns and their
+types, constraints, indexes), plus the audit log's triggers, and that they
+undo to an empty database and redo to the same schema. With the check that
+the migrations match the models, both backends hold the same logical schema
+(spec §2, principle 4). A migration that changes only the model, not the
+column, uses `SeparateDatabaseAndState`, as audit 0005 does: SQLite would
+otherwise rebuild the table, dropping the audit log's triggers (migration
+0004).
+
+18.6 `yk-portal database-status` (spec §36) shows the backend and its
+version, the database, and the result of each check: the migrations (none
+missing, none this version doesn't know) and the audit log's triggers; for
+SQLite, the file's mode and owner, WAL, synchronous FULL and foreign keys;
+for PostgreSQL, TLS, the role's privileges, and the encoding and locale. It
+exits with status 1 on a problem: the database unreachable or missing,
+migrations missing, triggers missing, SQLite's settings not in effect, an
+encoding other than UTF-8. Warnings leave the status 0: privileges the role
+doesn't need, no TLS to another host, a file other users can open, a locale
+that folds only ASCII letters. `yk-portal migrate` is spec §36's
+`database-migrate`.
+
+18.7 The tests run on SQLite and on PostgreSQL with the production database
+settings; SQLite's test database is a file, with WAL and IMMEDIATE
+transactions, so threads share it. `scripts/check` runs every check and both
+test runs.

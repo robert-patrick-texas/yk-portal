@@ -10,6 +10,7 @@ from django.db import transaction
 
 from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
+from yk_portal.core.db import recheck_on_conflict
 from yk_portal.portal_settings.service import current as current_settings
 
 from .models import Group, User, UserGroup
@@ -26,7 +27,8 @@ def create_group(name: str, actor: Actor, description: str = "") -> Group:
     validate_group_name(name)
     with transaction.atomic():
         _check_name_free(name)
-        group = Group.objects.create(name=name, description=description)
+        with recheck_on_conflict(lambda: _check_name_free(name)):
+            group = Group.objects.create(name=name, description=description)
         record(EventType.GROUP_CREATED, actor, details={"group": name})
     return group
 
@@ -51,7 +53,8 @@ def update_group(group: Group, actor: Actor, name: str, description: str) -> Non
         if len(details) == 1:
             return
         locked.name, locked.description = name, description
-        locked.save()
+        with recheck_on_conflict(lambda: _check_name_free(name, locked)):
+            locked.save()
         record(EventType.GROUP_UPDATED, actor, details=details)
     group.refresh_from_db()
 

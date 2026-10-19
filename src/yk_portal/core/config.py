@@ -253,13 +253,26 @@ def django_database(database: DatabaseConfig) -> dict[str, Any]:
     """The DATABASES["default"] entry for this configuration."""
     if database.backend == "sqlite":
         return sqlite_database(database.sqlite_path)
-    params = dict(database.postgres_params)
+    return postgresql_database(database.postgres_params)
+
+
+def postgresql_database(params: dict[str, str]) -> dict[str, Any]:
+    """A DATABASES entry for PostgreSQL, from libpq keywords (spec §30; addendum §18).
+
+    Each worker keeps its connection for a minute, checked before reuse, so a request
+    doesn't pay for a new connection and its TLS handshake: no pool is needed at this
+    scale. application_name shows yk-portal's connections in pg_stat_activity, unless
+    the connection string names them otherwise.
+    """
+    params = {"application_name": "yk-portal"} | params
     return {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": params.pop("dbname", ""),
         "USER": params.pop("user", ""),
         "HOST": params.pop("host", ""),
         "PORT": params.pop("port", ""),
+        "CONN_MAX_AGE": 60,
+        "CONN_HEALTH_CHECKS": True,
         "OPTIONS": params,
     }
 

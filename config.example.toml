@@ -17,7 +17,8 @@ public_base_url = "https://yk-portal.example.com"
 backend = "sqlite"
 sqlite_path = "/var/lib/yk-portal/yk-portal.sqlite3"
 # For PostgreSQL: a libpq connection string without a password. Put the
-# password in a passfile (mode 0600, owned by the service account).
+# password in a passfile (mode 0600, owned by the service account). README,
+# "PostgreSQL", shows how to set up the role and database.
 # postgres_dsn = "host=db.example.com dbname=yk_portal user=yk_portal sslmode=verify-full sslrootcert=/etc/yk-portal/db-ca.crt passfile=/etc/yk-portal/pgpass"
 
 [security]

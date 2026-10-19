@@ -1,12 +1,15 @@
+import threading
 from datetime import timedelta
 
 import pytest
+from django.db import connections
 from django.utils import timezone
 
 from yk_portal.accounts import services
 from yk_portal.accounts.models import AccountState, User
 from yk_portal.audit.models import AuditEvent, EventType, Result
 from yk_portal.audit.service import Actor
+from yk_portal.authentication import login
 from yk_portal.authentication.login import (
     MESSAGE,
     LoginFailed,
@@ -246,6 +249,37 @@ def test_the_third_failure_naming_no_key_locks_the_account(alice):
     assert fresh(alice).state == L
 
 
+@pytest.mark.django_db(transaction=True)
+def test_failures_at_once_are_each_counted(alice, otp, actor):
+    """Simultaneous failed logins are each counted once, and lock the account once, on
+    both backends (spec §48; addendum §18.4): PostgreSQL locks the rows, SQLite's
+    IMMEDIATE transactions take turns."""
+    limit = 10
+    portal_settings.update({"failed_login_limit": limit}, actor)
+    barrier = threading.Barrier(limit)
+    errors: list[BaseException] = []
+
+    def fail(session_counter: int) -> None:
+        try:
+            barrier.wait()
+            refused("alice", "wrong-pin1" + otp(3, session_counter))
+        except BaseException as e:  # noqa: BLE001 - reported below
+            errors.append(e)
+        finally:
+            connections.close_all()
+
+    workers = [threading.Thread(target=fail, args=(n,)) for n in range(1, limit + 1)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert errors == []
+    assert key_failures() == limit
+    assert fresh(alice).state == L
+    assert AuditEvent.objects.filter(event_type=EventType.LOGIN_FAILURE).count() == limit
+    assert AuditEvent.objects.filter(event_type=EventType.ACCOUNT_LOCKED).count() == 1
+
+
 def test_the_limit_follows_the_setting(alice, otp, actor):
     portal_settings.update({"failed_login_limit": 5}, actor)
     for session_counter in range(1, 5):
@@ -293,6 +327,24 @@ def test_unlocking_clears_every_count(alice, second_key, otp, actor):
         refused("alice", PIN + "x" * 44)
     services.unlock(alice, actor)
     assert (fresh(alice).failed_login_count, key_failures(PUBLIC_ID2)) == (0, 0)
+
+
+def test_an_account_disabled_during_the_check_is_refused(alice, otp, actor, monkeypatch):
+    """The refusal is recorded, though the check's transaction ends in it."""
+    accept = login.accept_otp
+
+    def accept_then_disable(*args):
+        accept(*args)
+        services.disable(fresh(alice), actor)
+
+    monkeypatch.setattr(login, "accept_otp", accept_then_disable)
+    refused("alice", PIN + otp(3, 1))
+    event = last_event()
+    assert (event.event_type, event.details) == (
+        EventType.LOGIN_FAILURE,
+        {"reason": "state changed"},
+    )
+    assert not Session.objects.exists()
 
 
 def test_a_disabled_account_is_refused_without_counting(alice, otp):

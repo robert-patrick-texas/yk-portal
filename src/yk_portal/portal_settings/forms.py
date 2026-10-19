@@ -4,6 +4,7 @@ from collections.abc import Mapping, MutableMapping
 from django import forms
 
 from yk_portal.accounts.models import Group, Theme
+from yk_portal.core.db import CodePoint
 
 from .service import NUMBER_RANGES
 
@@ -68,7 +69,7 @@ class SettingsForm(forms.Form):
         super().__init__(data, initial=initial)
         field = self.fields["default_group"]
         assert isinstance(field, forms.ChoiceField)  # noqa: S101 - declared above
-        groups = Group.objects.order_by("name").values_list("pk", "name")
+        groups = Group.objects.order_by(CodePoint("name")).values_list("pk", "name")
         field.choices = [("", "None"), *((str(pk), name) for pk, name in groups)]
 
     def clean_login_notice(self) -> str:

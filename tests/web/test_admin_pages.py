@@ -137,6 +137,15 @@ def test_search_and_filters(client, root, alice, make_user, actor, query, found)
     assert shown == found
 
 
+@pytest.mark.parametrize("q", ["émile", "ÉMILE", "Émile"])
+def test_search_ignores_the_case_of_any_letter(client, root, make_user, q):
+    """Also on SQLite, whose LIKE folds only ASCII letters (addendum §18.3)."""
+    make_user("ezola", display_name="Émile Zola")
+    make_user("emil", display_name="Emil")
+    html = page(client.get(reverse("admin-users"), {"q": q}))
+    assert set(re.findall(r'<a href="/admin/users/[0-9a-f-]+/">([a-z]+)</a>', html)) == {"ezola"}
+
+
 def test_pages_of_fifty(client, root, make_user):
     for n in range(60):
         make_user(f"user{n:02}")

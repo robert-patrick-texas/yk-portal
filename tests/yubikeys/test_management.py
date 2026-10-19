@@ -230,6 +230,8 @@ def test_the_maximum_counts_disabled_keys(user, actor, make_credential):
     [
         (new_key(public_id="vvccccbbcde"), "invalid_public_id"),
         (new_key(label="a\tb"), "invalid_label"),
+        # SQLite would store it; PostgreSQL would refuse it (addendum §18.3).
+        (new_key(label="x" * 256), "label_too_long"),
         (new_key(slot=3), "invalid_slot"),
     ],
 )
@@ -337,6 +339,14 @@ def test_update_yubikey(user, actor, make_credential):
             "new_slot": 2,
         }
     ]
+
+
+def test_update_yubikey_checks_the_label(user, actor, make_credential):
+    credential = make_credential(user)
+    management.update_yubikey(credential, actor, "x" * 255, 2)
+    with pytest.raises(ValidationError) as excinfo:
+        management.update_yubikey(credential, actor, "x" * 256, 2)
+    assert code_of(excinfo) == "label_too_long"
 
 
 def test_disable_and_enable(user, actor, make_credential):

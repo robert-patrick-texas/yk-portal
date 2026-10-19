@@ -2,6 +2,8 @@ from collections.abc import Mapping
 
 from django import forms
 
+from yk_portal.core.db import CodePoint
+
 from .models import AccountState, Group
 
 
@@ -35,7 +37,7 @@ def _comment_field() -> forms.CharField:
 
 def _groups_field() -> forms.ModelMultipleChoiceField:
     return forms.ModelMultipleChoiceField(
-        queryset=Group.objects.order_by("name"),
+        queryset=Group.objects.order_by(CodePoint("name")),
         required=False,
         widget=forms.CheckboxSelectMultiple,
         help_text="Groups grant nothing in yk-portal.",
@@ -59,7 +61,7 @@ class UserFilterForm(forms.Form):
         choices=[("", "Any role"), ("admin", "Admins"), ("user", "Not admins")],
     )
     group = forms.ModelChoiceField(
-        required=False, queryset=Group.objects.order_by("name"), empty_label="Any group"
+        required=False, queryset=Group.objects.order_by(CodePoint("name")), empty_label="Any group"
     )
 
 

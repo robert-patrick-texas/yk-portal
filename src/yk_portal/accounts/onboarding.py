@@ -10,7 +10,13 @@ from django.db import transaction
 
 from yk_portal.audit.service import Actor
 from yk_portal.authentication.passwords import hash_pin, validate_pin
-from yk_portal.yubikeys.management import NewYubikey, add_yubikey, check_yubikey, set_pin
+from yk_portal.yubikeys.management import (
+    NewYubikey,
+    add_yubikey,
+    check_yubikey,
+    lock_owner,
+    set_pin,
+)
 from yk_portal.yubikeys.models import ProvisioningMethod, YubikeyCredential
 
 from .models import User
@@ -51,6 +57,7 @@ def finish_with_otp(user: User, otp_text: str, pin: str, actor: Actor) -> Yubike
     check_ready_to_finish(user)
     validate_pin(pin)
     with transaction.atomic():
+        lock_owner(user)  # before check_yubikey locks the YubiKey
         credential = check_yubikey(user, otp_text)
         set_pin(user, [credential], pin, actor)
         complete_provisioning(user, actor)

@@ -1,9 +1,8 @@
-import os
 import threading
 from datetime import timedelta
 
 import pytest
-from django.db import connection, connections
+from django.db import connections
 from django.utils import timezone
 
 from yk_portal.core.encryption import DecryptionError
@@ -140,13 +139,11 @@ def test_a_damaged_stored_secret_is_a_server_fault(credential, otp):
         accept_otp(credential, otp(3, 1))
 
 
-@pytest.mark.skipif(
-    os.environ.get("YK_PORTAL_TEST_DATABASE") != "postgresql",
-    reason="concurrent writers need PostgreSQL (in-memory SQLite serializes them)",
-)
 @pytest.mark.django_db(transaction=True)
 def test_the_same_otp_submitted_at_once_is_accepted_once(make_credential, make_otp):
-    """Spec §48: exactly one of simultaneous logins with the same OTP succeeds."""
+    """Spec §48: exactly one of simultaneous logins with the same OTP succeeds, on both
+    backends: the counters are saved by an UPDATE that applies only while they are
+    behind."""
     credential = make_credential(public_id="vvccccbbcdef", private_id=PRIVATE_ID, aes_key=K1)
     text = make_otp("vvccccbbcdef", PRIVATE_ID, K1, 7, 3)
     threads = 8
@@ -171,4 +168,3 @@ def test_the_same_otp_submitted_at_once_is_accepted_once(make_credential, make_o
         worker.join()
     assert sorted(results) == ["accepted"] + [Rejection.REPLAYED] * (threads - 1)
     assert counters(credential) == (7, 3)
-    assert connection.vendor == "postgresql"

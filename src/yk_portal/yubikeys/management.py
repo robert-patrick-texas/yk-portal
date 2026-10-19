@@ -22,6 +22,7 @@ from yk_portal.audit.service import Actor, record
 from yk_portal.authentication.models import Session
 from yk_portal.authentication.passwords import PinHashes, hash_pin, validate_pin
 from yk_portal.authentication.sessions import revoke_sessions
+from yk_portal.core.db import recheck_on_conflict
 from yk_portal.portal_settings.service import current as current_settings
 
 from .models import (
@@ -114,21 +115,14 @@ def add_yubikey(
     token = _check_test_otp(public_id, key, test_otp) if test_otp is not None else None
     with transaction.atomic():
         # Locked, so two adds at once can't pass the maximum.
-        User.objects.select_for_update().get(pk=user.pk)
+        lock_owner(user)
         limit = current_settings().max_yubikeys_per_user
         if YubikeyCredential.objects.filter(user=user).count() >= limit:
             raise ValidationError(
                 f"An account can have at most {limit} YubiKeys.", code="too_many_yubikeys"
             )
-        if YubikeyCredential.objects.filter(public_id=public_id).exists():
-            raise ValidationError(
-                "A YubiKey with this public ID is registered already.", code="public_id_taken"
-            )
         digest = private_id_digest(key.private_id)
-        if YubikeyCredential.objects.filter(private_id_digest=digest).exists():
-            raise ValidationError(
-                "A YubiKey with this private ID is registered already.", code="private_id_taken"
-            )
+        _check_ids_free(public_id, digest)
         credential = YubikeyCredential(
             user=user,
             public_id=public_id,
@@ -157,7 +151,9 @@ def add_yubikey(
             credential.migration_source = migrated.source
             details |= {"enabled": migrated.enabled, "source": migrated.source}
         credential.set_secrets(key.private_id, key.aes_key)
-        credential.save()
+        # Another account may add the same YubiKey at the same moment.
+        with recheck_on_conflict(lambda: _check_ids_free(public_id, digest)):
+            credential.save()
         if migrated and migrated.created_at:
             # created_at is set on insert, whatever the credential held.
             credential.created_at = migrated.created_at
@@ -176,6 +172,7 @@ def set_pin(user: User, credentials: Sequence[YubikeyCredential], pin: str, acto
     validate_pin(pin)
     hashes = [hash_pin(pin) for _ in credentials]
     with transaction.atomic():
+        lock_owner(user)
         for credential, pin_hashes in zip(credentials, hashes, strict=True):
             if not YubikeyCredential.objects.filter(pk=credential.pk, user=user).update(
                 pin_hash=pin_hashes.web,
@@ -211,6 +208,7 @@ def change_pin(
                 "That OTP comes from another YubiKey. Touch this one.", code="other_yubikey"
             )
         with transaction.atomic():
+            lock_owner(user)
             accept_otp(find_credential(user, otp.public_id), otp)
             keys = list(YubikeyCredential.objects.filter(user=user)) if everywhere else [credential]
             set_pin(user, keys, pin, actor)
@@ -297,6 +295,7 @@ def set_yubikey_enabled(
         ValidationError: It is the last enabled YubiKey and ALLOW_LAST is false.
     """
     with transaction.atomic():
+        lock_owner(credential.user)  # for _keep_one
         locked = YubikeyCredential.objects.select_for_update().get(pk=credential.pk)
         if locked.enabled == enabled:
             return
@@ -319,6 +318,7 @@ def remove_yubikey(credential: YubikeyCredential, actor: Actor, allow_last: bool
         ValidationError: As for set_yubikey_enabled.
     """
     with transaction.atomic():
+        lock_owner(credential.user)  # for _keep_one
         locked = YubikeyCredential.objects.select_for_update().get(pk=credential.pk)
         if locked.enabled and not allow_last:
             _keep_one(locked)
@@ -391,6 +391,27 @@ def _check_test_otp(public_id: str, key: NewYubikey, otp_text: str) -> Token:
             code="wrong_private_id",
         )
     return token
+
+
+def lock_owner(user: User) -> None:
+    """Lock USER's row until the transaction ends, before any of its YubiKeys' rows.
+
+    Changes that check or change several of an account's YubiKeys then take turns on
+    PostgreSQL as they do on SQLite, and every transaction locks the account before its
+    YubiKeys, as a login does, so none deadlock (addendum §18.4).
+    """
+    User.objects.select_for_update().get(pk=user.pk)
+
+
+def _check_ids_free(public_id: str, digest: str) -> None:
+    if YubikeyCredential.objects.filter(public_id=public_id).exists():
+        raise ValidationError(
+            "A YubiKey with this public ID is registered already.", code="public_id_taken"
+        )
+    if YubikeyCredential.objects.filter(private_id_digest=digest).exists():
+        raise ValidationError(
+            "A YubiKey with this private ID is registered already.", code="private_id_taken"
+        )
 
 
 def _keep_one(credential: YubikeyCredential) -> None:

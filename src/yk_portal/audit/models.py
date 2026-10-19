@@ -15,6 +15,8 @@ from typing import Any, ClassVar
 from django.db import IntegrityError, models
 from django.utils import timezone
 
+from yk_portal.core.db import UnicodeJSONEncoder
+
 from .immutability import rewriting
 
 IMMUTABLE = "audit events are immutable"
@@ -90,7 +92,8 @@ class AuditEvent(models.Model):
     source_ip = models.GenericIPAddressField(null=True, blank=True)
     session_id = models.UUIDField(null=True, blank=True)
     result = models.CharField(max_length=8, choices=Result.choices, default=Result.SUCCESS)
-    details = models.JSONField(default=dict, blank=True)
+    # Stored with its non-ASCII characters, so searching it works on SQLite (addendum §18.3).
+    details = models.JSONField(default=dict, blank=True, encoder=UnicodeJSONEncoder)
 
     objects: ClassVar[models.Manager[AuditEvent]] = AuditEventQuerySet.as_manager()
 

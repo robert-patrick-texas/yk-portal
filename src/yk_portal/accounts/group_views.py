@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 
 from yk_portal.authentication.access import admin_required
 from yk_portal.authentication.sessions import PortalRequest, request_actor
+from yk_portal.core.db import CodePoint
 
 from . import groups as service
 from .forms import AddMemberForm, GroupForm
@@ -19,7 +20,7 @@ from .services import normalize_username
 
 @admin_required
 def groups(request: PortalRequest) -> HttpResponse:
-    found = Group.objects.annotate(member_count=Count("user_groups")).order_by("name")
+    found = Group.objects.annotate(member_count=Count("user_groups")).order_by(CodePoint("name"))
     return render(
         request,
         "accounts/admin/groups.html",
@@ -51,12 +52,13 @@ def _group(group_id: uuid.UUID) -> Group:
 def _detail(
     request: PortalRequest, group: Group, form: AddMemberForm | None = None
 ) -> HttpResponse:
+    members = User.objects.filter(user_groups__group=group).order_by(CodePoint("username"))
     return render(
         request,
         "accounts/admin/group.html",
         {
             "group": group,
-            "members": User.objects.filter(user_groups__group=group).order_by("username"),
+            "members": members,
             "is_default": request.portal_settings.default_group == group.pk,
             "form": form or AddMemberForm(),
         },

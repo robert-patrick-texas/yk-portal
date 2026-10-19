@@ -15,6 +15,7 @@ from django.db import transaction
 from yk_portal.accounts.models import Group, Theme
 from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
+from yk_portal.core.db import take_turns
 
 from .models import Setting
 
@@ -72,7 +73,9 @@ def update(changes: Mapping[str, object], actor: Actor) -> list[str]:
     """
     changed = []
     with transaction.atomic():
-        list(Setting.objects.select_for_update().filter(key__in=list(changes)))
+        # Two changes at once take turns, so each records the value it replaced; a setting
+        # at its default has no row to lock (addendum §18.4).
+        take_turns("settings")
         before = current()
         cleaned, errors = {}, {}
         for key, value in changes.items():

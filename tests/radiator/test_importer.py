@@ -15,7 +15,7 @@ from yk_portal.audit.models import AuditEvent, EventType
 from yk_portal.authentication.passwords import check_web_password
 from yk_portal.core import sha512_crypt
 from yk_portal.portal_settings import service as portal_settings
-from yk_portal.radiator import csvfile
+from yk_portal.radiator import csvfile, importer
 from yk_portal.yubikeys.models import ProvisioningMethod, YubikeyCredential
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("master_key")]
@@ -442,6 +442,24 @@ def test_a_change_while_importing_rolls_everything_back(run, monkeypatch):
         run(row())
     assert not User.objects.exists()
     assert not AuditEvent.objects.exists()
+
+
+def test_an_account_deleted_while_importing_rolls_everything_back(run, monkeypatch, make_user):
+    """On PostgreSQL the plan locks nothing, so an account can go before the rows are
+    applied (addendum §18.4)."""
+    make_user("alice")
+    make_plan = importer._plan
+
+    def plan_then_delete(*args):
+        report = make_plan(*args)
+        User.objects.filter(username="alice").delete()
+        return report
+
+    monkeypatch.setattr(importer, "_plan", plan_then_delete)
+    with pytest.raises(CommandError, match="changed during the import \\(an account was renamed"):
+        run(row(), row("bob", PUB2, PRIV2))
+    assert User.objects.filter(username="alice").exists()
+    assert not User.objects.filter(username="bob").exists()
 
 
 # Counter sync (addendum §7.5)

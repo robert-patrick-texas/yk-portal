@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Every check, and the tests on both database backends (spec §44.6, §48; addendum §18.7):
+# what must pass before a commit. Arguments go to both pytest runs, such as -x or -k NAME.
+# The PostgreSQL run needs a server and a role that may create databases (README).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check
+for backend in sqlite postgresql; do
+    echo "Tests on $backend:"
+    YK_PORTAL_TEST_DATABASE=$backend uv run pytest -q "$@"
+done

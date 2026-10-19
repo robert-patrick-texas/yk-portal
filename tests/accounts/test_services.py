@@ -121,6 +121,14 @@ def test_create_user_checks_the_email(actor):
         services.create_user("alice", actor, email="not-an-address")
 
 
+def test_email_addresses_fit_the_column(actor):
+    """Django's check allows 320 characters; SQLite would store them, PostgreSQL would
+    refuse them (addendum §18.3)."""
+    services.create_user("alice", actor, email="a" * 247 + "@ex.com")
+    with raises("email_too_long"):
+        services.create_user("bob", actor, email="a" * 248 + "@ex.com")
+
+
 def test_new_users_get_the_default_group(actor):
     netops = create_group("netops", actor)
     portal_settings.update({"default_group": netops.pk}, actor)

@@ -229,22 +229,37 @@ def _succeed(
     the YubiKey used; the other YubiKeys' counts stay (addendum §2.14)."""
     with transaction.atomic():
         account = User.objects.select_for_update().get(pk=user.pk)
-        if account.state != state:  # changed by an admin during the check
-            _refuse(Actor(user=None, name="", source_ip=client.source_ip), account, "state changed")
-        account.failed_login_count = 0
-        account.last_login_at = timezone.now()
-        account.save(update_fields=["failed_login_count", "last_login_at", "updated_at"])
-        details: dict[str, str] = {"state": state}
-        if credential is not None:
-            keys = YubikeyCredential.objects.filter(pk=credential.pk)
-            keys.update(failed_login_count=0)
-            if new_pin_hash:
-                keys.filter(pin_hash="").update(pin_hash=new_pin_hash)
-            details["public_id"] = credential.public_id
-        session, token = start_session(account, client)
-        actor = Actor(
-            user=account, name=account.username, source_ip=client.source_ip, session_id=session.pk
-        )
-        record(EventType.LOGIN_SUCCESS, actor, account, details=details)
+        changed = account.state != state  # by an admin during the check
+        if not changed:
+            session, token = _start(account, client, state, credential, new_pin_hash)
+    if changed:
+        # Recorded once the transaction is over: LoginFailed would roll the event back.
+        _refuse(Actor(user=None, name="", source_ip=client.source_ip), account, "state changed")
     purge_ended_sessions(current_settings())
+    return session, token
+
+
+def _start(
+    account: User,
+    client: Client,
+    state: AccountState,
+    credential: YubikeyCredential | None,
+    new_pin_hash: str,
+) -> tuple[Session, str]:
+    """_succeed's changes, with ACCOUNT locked."""
+    account.failed_login_count = 0
+    account.last_login_at = timezone.now()
+    account.save(update_fields=["failed_login_count", "last_login_at", "updated_at"])
+    details: dict[str, str] = {"state": state}
+    if credential is not None:
+        keys = YubikeyCredential.objects.filter(pk=credential.pk)
+        keys.update(failed_login_count=0)
+        if new_pin_hash:
+            keys.filter(pin_hash="").update(pin_hash=new_pin_hash)
+        details["public_id"] = credential.public_id
+    session, token = start_session(account, client)
+    actor = Actor(
+        user=account, name=account.username, source_ip=client.source_ip, session_id=session.pk
+    )
+    record(EventType.LOGIN_SUCCESS, actor, account, details=details)
     return session, token

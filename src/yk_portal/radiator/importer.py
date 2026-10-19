@@ -18,7 +18,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 
@@ -195,8 +195,15 @@ def run(
                 record(
                     EventType.RADIATOR_IMPORT_COMPLETED, actor, details=details | report.totals()
                 )
-    except (ValidationError, IntegrityError) as e:
-        reason = " ".join(e.messages) if isinstance(e, ValidationError) else str(e)
+    except (ValidationError, IntegrityError, ObjectDoesNotExist) as e:
+        # On PostgreSQL the plan locks nothing: an account can be renamed or deleted, or a
+        # YubiKey added, before the rows are applied (addendum §18.4).
+        if isinstance(e, ValidationError):
+            reason = " ".join(e.messages)
+        elif isinstance(e, ObjectDoesNotExist):
+            reason = "an account was renamed or deleted"
+        else:
+            reason = str(e)
         raise ImportFailed(
             f"yk-portal changed during the import ({reason}); nothing imported. Run it again."
         ) from None

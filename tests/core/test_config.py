@@ -89,8 +89,22 @@ def test_postgresql_connection_string_maps_to_django(tmp_path):
         "USER": "yk",
         "HOST": "db.example.com",
         "PORT": "5433",
-        "OPTIONS": {"sslmode": "verify-full", "passfile": "/etc/yk-portal/pgpass"},
+        "CONN_MAX_AGE": 60,
+        "CONN_HEALTH_CHECKS": True,
+        "OPTIONS": {
+            "application_name": "yk-portal",
+            "sslmode": "verify-full",
+            "passfile": "/etc/yk-portal/pgpass",
+        },
     }
+
+
+def test_postgresql_connection_string_may_name_the_application(tmp_path):
+    dsn = "dbname=yk_portal application_name=portal-2"
+    config = load(
+        tmp_path, MINIMAL + f'[database]\nbackend = "postgresql"\npostgres_dsn = "{dsn}"\n'
+    )
+    assert django_database(config.database)["OPTIONS"] == {"application_name": "portal-2"}
 
 
 @pytest.mark.parametrize(
