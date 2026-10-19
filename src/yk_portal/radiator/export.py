@@ -5,8 +5,6 @@ column holds the SHA-512 crypt hash of each YubiKey's PIN, which a plain
 `import` would hash again.
 """
 
-import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,6 +12,7 @@ from yk_portal.accounts.models import AccountState
 from yk_portal.audit.models import EventType
 from yk_portal.audit.service import Actor, record
 from yk_portal.core.encryption import DecryptionError
+from yk_portal.core.files import FileWriteError, new_file
 from yk_portal.yubikeys.models import YubikeyCredential
 
 from . import csvfile
@@ -93,37 +92,16 @@ def build() -> Export:
 def write_file(path: Path, text: str, force: bool) -> None:
     """Write TEXT to PATH with mode 0600, replacing an existing file only if FORCE.
 
-    The file is written under a temporary name in the same directory, then
-    renamed, so a failed export leaves no partial file behind.
+    A failed export leaves no partial file behind.
 
     Raises:
         ExportError: PATH exists (without FORCE), is a directory, or can't be written.
     """
-    if path.is_dir():
-        raise ExportError(f"{path} is a directory")
-    if not force and (path.exists() or path.is_symlink()):
-        raise ExportError(f"{path} already exists (use --force to replace it)")
     try:
-        # mkstemp creates the file with mode 0600.
-        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".yk-portal-export.")
-    except OSError as e:
-        raise ExportError(f"cannot write to the directory {path.parent}: {e.strerror}") from None
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as file:
-            file.write(text)
-            file.flush()
-            os.fsync(file.fileno())
-        if force:
-            os.replace(temporary, path)
-        else:
-            # A link fails if PATH appeared meanwhile, where a rename would replace it.
-            os.link(temporary, path)
-    except FileExistsError:
-        raise ExportError(f"{path} already exists (use --force to replace it)") from None
-    except OSError as e:
-        raise ExportError(f"cannot write {path}: {e.strerror}") from None
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+        with new_file(path, force) as file:
+            file.write(text.encode())
+    except FileWriteError as e:
+        raise ExportError(str(e)) from None
 
 
 def record_export(actor: Actor, export: Export, destination: str) -> None:

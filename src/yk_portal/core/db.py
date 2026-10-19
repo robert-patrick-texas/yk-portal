@@ -13,7 +13,10 @@ few places that need backend-specific SQL, isolated here:
 - recheck_on_conflict gives a unique value taken at the same moment by
   another transaction the same ValidationError on PostgreSQL as on SQLite;
 - take_turns makes transactions take turns on PostgreSQL, as all writers do
-  on SQLite, where there is no row to lock.
+  on SQLite, where there is no row to lock;
+- snapshot gives a backup one consistent view of every table, without making
+  writers wait; exclude_writers makes them wait for a restore; short_message
+  gives an error's message without the row PostgreSQL quotes.
 
 Writers take turns on SQLite (IMMEDIATE transactions) but not on PostgreSQL,
 where a check made in one transaction can be overtaken by another: rows are
@@ -22,14 +25,17 @@ locked where that matters (addendum §18.4).
 
 import hashlib
 import json
+import random
+import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
 
-from django.db import IntegrityError, connection, transaction
+from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.db.models import CharField, Func, TextField
+from django.db.models import CharField, Func, Model, TextField
 from django.db.models.lookups import IContains
+from django.db.transaction import TransactionManagementError
 
 
 class CodePoint(Func):
@@ -104,6 +110,75 @@ def take_turns(name: str) -> None:
         key = int.from_bytes(hashlib.sha256(f"yk-portal:{name}".encode()).digest()[:8], signed=True)
         with connection.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_xact_lock(%s)", [key])
+
+
+@contextmanager
+def snapshot() -> Generator[None]:
+    """Read the database as it was when the block began, all tables at the same moment,
+    while other transactions go on writing (spec §28.2-§28.3).
+
+    On PostgreSQL, a read-only REPEATABLE READ transaction, as pg_dump uses. On SQLite,
+    a deferred transaction, made read-only: in WAL mode it reads the database as of its
+    first read and takes no write lock, where Django's IMMEDIATE transactions would
+    make every login wait for the backup.
+    """
+    if connection.in_atomic_block:
+        raise TransactionManagementError("a snapshot can't start inside a transaction")
+    if connection.vendor == "postgresql":
+        with transaction.atomic(), connection.cursor() as cursor:
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            yield
+        return
+    with connection.cursor() as cursor:
+        cursor.execute("PRAGMA query_only = ON")
+        cursor.execute("BEGIN DEFERRED")
+        try:
+            yield
+        finally:
+            cursor.execute("ROLLBACK")
+            cursor.execute("PRAGMA query_only = OFF")
+
+
+class Busy(DatabaseError):
+    """Other transactions kept the tables exclude_writers() needs for too long."""
+
+
+def exclude_writers(*models: type[Model], patience: float = 30.0) -> None:
+    """Make other transactions wait to change these models' tables until this one ends;
+    they can still read them, as they were. Call it in a transaction, before reading.
+
+    On PostgreSQL, LOCK TABLE ... IN EXCLUSIVE MODE, which the tables' owner may take.
+    The locks are taken all at once or not at all (NOWAIT, in a savepoint), and tried
+    again until PATIENCE seconds have passed: waiting for one table while holding
+    another could deadlock with a request that locks them in the other order. On
+    SQLite nothing, since an IMMEDIATE transaction already excludes other writers.
+
+    Raises:
+        Busy: The tables were never all free at once.
+    """
+    if connection.vendor != "postgresql":
+        return
+    tables = ", ".join(connection.ops.quote_name(m._meta.db_table) for m in models)
+    deadline = time.monotonic() + patience
+    while True:
+        try:
+            with transaction.atomic(), connection.cursor() as cursor:
+                cursor.execute(f"LOCK TABLE {tables} IN EXCLUSIVE MODE NOWAIT")
+            return
+        except OperationalError as e:
+            if getattr(e.__cause__, "sqlstate", None) != "55P03":  # lock_not_available
+                raise
+        if time.monotonic() > deadline:
+            raise Busy(f"other transactions kept the tables busy for {patience:g} seconds")
+        time.sleep(random.uniform(0.01, 0.1))  # noqa: S311 - not for security
+
+
+def short_message(error: DatabaseError) -> str:
+    """The database's message for ERROR without PostgreSQL's DETAIL, which can quote
+    the row it refused, secrets and all."""
+    diag = getattr(error.__cause__, "diag", None)
+    message = getattr(diag, "message_primary", None) or str(error)
+    return " ".join(message.splitlines()[0].split()) if message else type(error).__name__
 
 
 class UnicodeJSONEncoder(json.JSONEncoder):

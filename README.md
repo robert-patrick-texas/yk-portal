@@ -27,8 +27,9 @@ provisioning, temporary passwords, the admin role, hard delete; any account's Yu
 the PIN, disable, remove, reveal the secrets after a step-up; groups;
 settings); the audit log, whose events can't be changed or deleted, with
 its admin page and its copy in the system journal; PostgreSQL alongside
-SQLite, alike in behavior and schema, with `database-status`. Backup and
-restore (spec Phase 9) come next.
+SQLite, alike in behavior and schema, with `database-status`; encrypted
+backups, made while yk-portal runs, and their verification and restore, on
+either backend. Production hardening (spec Phase 10) comes next.
 
 ## Documents
 
@@ -175,6 +176,9 @@ audit event naming the operating-system user (and the `sudo` caller).
 | `create-admin USERNAME [--email EMAIL]` | Creates another admin account |
 | `reset-admin USERNAME` | Gives an admin account a new temporary password and puts it in PROVISIONING: the way back in when no admin can sign in |
 | `radiator-export [--force] FILE\|-` | Writes every YubiKey in radiator-yubikey's export format (mode 0600), for `yubikey-db.sh import --from-export --replace`; prints which keys are exported inactive, and why |
+| `backup-create [--force] FILE\|DIRECTORY\|-` | Backs up the database to an encrypted file (mode 0600); a directory gets `yk-portal-YYYYMMDDTHHMMSSZ.backup`. `-v 0` prints nothing, for cron |
+| `backup-verify FILE\|-` | Checks a backup completely, as a restore does first, and that this installation can restore it; exits with status 1 if not |
+| `backup-restore [--replace] [--no-input] FILE` | Restores a backup in one transaction, after checking it and asking for `restore` to be typed. A database with accounts, YubiKeys, groups or settings needs `--replace` |
 | `radiator-import [--dry-run] [--skip-invalid] [--counters-only] FILE\|-` | Reads a `yubikey-db.sh export` file: creates the accounts and adds the YubiKeys yk-portal doesn't have, and moves counters forward for those it has. `--skip-invalid` also leaves out Radiator's reserved accounts (`svc.`, `anycast-`); `--counters-only` only moves counters, for cron |
 
 New accounts start in PROVISIONING with the roles `user` (and `admin`), the
@@ -198,6 +202,51 @@ Moving counters forward from Radiator's logins, for example from cron
 ```bash
 sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal radiator-import --counters-only -
 ```
+
+## Backup and restore
+
+`backup-create` writes the whole database (accounts, YubiKeys, groups,
+settings and the audit log) to one file, encrypted with AES-256-GCM under a
+key derived from the master key (addendum §19). It reads one moment of the
+database without holding up logins, so it can run while yk-portal runs, for
+example nightly, keeping 30 days:
+
+```bash
+sudo install -d -m 0700 -o yk-portal -g yk-portal /var/backups/yk-portal
+sudo tee /etc/cron.d/yk-portal-backup <<'CRON'
+30 2 * * * yk-portal yk-portal backup-create -v 0 /var/backups/yk-portal && find /var/backups/yk-portal -name 'yk-portal-*.backup' -mtime +30 -delete
+CRON
+```
+
+A backup can't be read without the master key that made it: keep a copy of
+`/etc/yk-portal/master.key` somewhere safe and apart from the backups (a
+backup stored with its key protects nothing). `head -n 2 FILE` shows which
+backup a file is, when and by which version it was made, and the master
+key's ID; `backup-verify` checks it completely.
+
+To restore, stop the web service (logins would wait for the restore), then:
+
+```bash
+sudo -u yk-portal yk-portal backup-verify /var/backups/yk-portal/yk-portal-20261018T023000Z.backup
+sudo -u yk-portal yk-portal backup-restore --replace /var/backups/yk-portal/yk-portal-20261018T023000Z.backup
+```
+
+The restore replaces the accounts, YubiKeys, groups and settings, and ends
+every session. It never moves a YubiKey's OTP counters back, and keeps the
+audit events recorded since the backup. A backup restores with the
+yk-portal version that made it (the same migrations): on a new server,
+install that version, put the master key in place, run `yk-portal migrate`,
+restore, and upgrade afterwards. Counters of YubiKeys used since the backup
+are then behind; move them forward from radiator-yubikey:
+
+```bash
+sudo /opt/radiator-yubikey/yubikey-db.sh export - | sudo -u yk-portal yk-portal radiator-import --counters-only -
+```
+
+A backup restores into either backend. To move from SQLite to PostgreSQL:
+`backup-create` with SQLite configured, set up PostgreSQL (above), change
+`[database]` in the configuration, then `yk-portal migrate` and
+`backup-restore` into the new, empty database.
 
 ## Layout
 

@@ -1,4 +1,7 @@
+import os
+import signal
 import stat
+import time
 
 import pytest
 
@@ -45,3 +48,24 @@ def test_master_key_create_usage(monkeypatch, capsys):
     assert run(monkeypatch, "master-key-create", "--help") == 0
     assert "usage: yk-portal master-key-create" in capsys.readouterr().out
     assert run(monkeypatch, "master-key-create", "a", "b") == 2
+
+
+def test_a_command_stopped_by_sigterm_ends_as_after_ctrl_c(monkeypatch):
+    """Its transactions roll back and the file it was writing is removed (with blocks
+    and finally clauses run), as for KeyboardInterrupt."""
+    cleaned = []
+
+    def command(argv):
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(5)
+        finally:
+            cleaned.append(True)
+
+    monkeypatch.setattr("django.core.management.execute_from_command_line", command)
+    handler = signal.getsignal(signal.SIGTERM)
+    try:
+        assert run(monkeypatch, "backup-create", "x") == 128 + signal.SIGTERM
+    finally:
+        signal.signal(signal.SIGTERM, handler)
+    assert cleaned == [True]

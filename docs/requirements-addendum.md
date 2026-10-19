@@ -630,6 +630,11 @@ live connector (section 11) carries removals.
 | 2026-10-19 | Changes at the same moment end as on SQLite: the admin role's row and the account's row are locked first, a value taken meanwhile is "taken", settings changes take turns | 18.4 |
 | 2026-10-19 | Tests check that the migrations build the models' schema on each backend, and undo and redo | 18.5 |
 | 2026-10-19 | `database-status` command; `migrate` is spec §36's `database-migrate` | 18.6 |
+| 2026-10-19 | Backups: every table but the sessions, read in one snapshot while yk-portal runs, as JSON Lines in AES-256-GCM segments behind a header anyone can read | 19.2, 19.3 |
+| 2026-10-19 | `database-export` and `database-import` are `backup-create` and `backup-restore`: no unencrypted export; a backup moves a database between backends | 19.1 |
+| 2026-10-19 | A backup restores only with the same schema and master key; `backup-verify` checks everything a restore checks | 19.4, 19.5 |
+| 2026-10-19 | A restore needs `--replace` for a database with data and `restore` typed (or `--no-input`), and runs in one transaction | 19.6 |
+| 2026-10-19 | A restore never moves OTP counters back, keeps the audit events, and ends every session | 19.7 |
 
 ---
 
@@ -869,3 +874,130 @@ that folds only ASCII letters. `yk-portal migrate` is spec §36's
 settings; SQLite's test database is a file, with WAL and IMMEDIATE
 transactions, so threads share it. `scripts/check` runs every check and both
 test runs.
+
+---
+
+## 19. Backup and restore
+
+Adds to spec §28, §29, §36 and §44.7 (spec Phase 9).
+
+19.1 Three commands (spec §36), run as the service account like the others,
+with the master key:
+
+- `backup-create FILE|DIRECTORY|-` writes a backup (mode 0600); given a
+  directory, it names the file `yk-portal-YYYYMMDDTHHMMSSZ.backup`;
+- `backup-verify FILE|-` is spec §29's dry run (19.4);
+- `backup-restore [--replace] [--no-input] FILE` restores one (19.6).
+
+Spec §36's `database-export` and `database-import` are these two: an export
+is never written unencrypted, since it holds PIN hashes and email
+addresses. A backup restores into either backend, so `backup-create` with
+SQLite and `backup-restore` with PostgreSQL move a database from one to the
+other.
+
+19.2 A backup holds every table but the sessions: accounts, roles and role
+grants, groups and members, YubiKeys (their secrets as stored, still
+encrypted with the master key), settings and the audit log. It is a logical
+export in JSON Lines: for each table a line naming its columns, then a line
+per row, parents first, rows in primary-key order, so the same database
+always gives the same text (spec §28's "deterministic"); on either backend
+the same values give the same text, but for the order of the keys in JSON
+objects, which PostgreSQL chooses and SQLite keeps as written. Times keep
+their microseconds (section 17.1); IP addresses are written as Django writes
+them. Each row written is first read back as a restore would read it: a row
+that a restore would refuse, which only SQL around yk-portal could store,
+stops the backup with an error naming the row, rather than making a backup
+that can't be restored. It is read in one snapshot that
+doesn't make logins wait: on SQLite a read transaction in WAL mode, not a
+copy of the file (spec §28.2); on PostgreSQL a read-only REPEATABLE READ
+transaction (spec §28.3). Backups can be made while yk-portal runs.
+Sessions are left out: a restore would otherwise bring back sessions that
+had ended or been signed out since.
+
+19.3 The file (spec §28.1): two lines anyone can read (`head -n 2 FILE`),
+the magic `yk-portal-backup` with the format version, then JSON with the
+backup's ID, the time, the yk-portal version, the backend, the schema (each
+app's last migration), the cipher, the master key's ID, a salt and a nonce
+prefix. They hold no name or count: what a backup holds is encrypted. The
+contents follow in AES-256-GCM segments of 64 KiB, as Tink's streaming AEAD
+does it: each backup has its own key, derived with HKDF-SHA256 from the
+backup key (spec §22.5) and the salt; each segment's nonce is the prefix,
+the segment's number and whether it is the last; the two header lines are
+every segment's associated data, byte for byte. A changed header or
+segment, segments moved, dropped or repeated, a file cut short or with
+anything added, and another master key all fail authentication. Nothing is held whole in memory
+or written unencrypted: the file is written under a temporary name in the
+same directory, renamed when complete, and removed if the backup fails or
+the command is stopped (spec §28, §44.7); every command stopped by SIGTERM,
+from cron or systemd, ends as after Ctrl+C. It isn't compressed.
+
+19.4 `backup-verify` checks what a restore checks before changing anything
+(spec §29 1-4): the format, every segment's authentication, every row (this
+version's tables and columns, each value of its column's type, each
+reference to a row the backup holds), and that this installation can
+restore it, with the same master key and schema. It exits with status 1 if
+not. It reads nothing from the database and records no event.
+
+19.5 A backup restores only into a database with the same migrations as
+the one it was made from. To restore an older backup into a newer version:
+install the version that made it (the header names it), restore, then
+upgrade. Converting older backups was not chosen, since a migration can
+change data as well as columns. A backup made with another master key is
+refused, naming both keys' IDs; master key rotation (spec §37) will have to
+keep older keys for older backups.
+
+19.6 `backup-restore` (spec §29) checks the whole backup first (19.4). It
+refuses a database holding accounts, YubiKeys, groups or settings without
+`--replace` (spec §29 6), and asks for `restore` to be typed unless
+`--no-input` is given (spec §29 5). Then, in one transaction, it checks
+that the file is still the backup it verified and that the database is
+migrated, empties the tables, writes the backup's rows as they are (IDs,
+times and hashes unchanged), and records `BACKUP_RESTORED` (spec §29 7). A
+failure at any point, such as a segment that fails authentication then,
+changes nothing; if the database refuses a row (such as a value longer than
+its column, which SQLite stored and PostgreSQL refuses), the error names the
+table, never the row's values. Meanwhile other transactions read the tables
+as they were and wait to change them. On PostgreSQL the tables are locked
+`EXCLUSIVE`, all at once or not at all, tried again for up to 30 seconds:
+waiting for one table while holding another could deadlock with a request
+that locks them in the other order, such as removing an admin. On SQLite,
+IMMEDIATE transactions already take turns. It may run while yk-portal runs,
+but its pages and logins wait for it: on SQLite a login gives up after 5
+seconds, so stop the service first.
+
+19.7 What a restore keeps:
+
+- **OTP counters never move back** (spec §17). For a YubiKey the database
+  holds with the same public ID and private ID, the database's counters (and
+  last use) are kept when they are ahead of the backup's. A database that is
+  lost takes its counters with it: after restoring into an empty database,
+  OTPs typed since the backup could be replayed until the counters move
+  forward, which `radiator-import --counters-only` does from
+  radiator-yubikey's export. The same holds for a YubiKey removed since the
+  backup, which the restore brings back with the backup's counters.
+- **The audit log** (section 17.2: never purged). The restore adds the
+  backup's events the database lacks; an event that differs from the
+  backup's, which only SQL around the triggers could do, is put back as the
+  backup has it and reported. Events are compared as a backup writes them,
+  so PostgreSQL's way of writing some IPv6 addresses isn't taken for a
+  change. Events recorded since the backup stay.
+- **No session**: every session ends; everyone signs in again.
+
+19.8 Events: `BACKUP_CREATED` records the backup's ID, its destination, its
+size, and how many accounts, YubiKeys and audit events it holds;
+`BACKUP_RESTORED` records the backup's ID, when and by which version it was
+made, whether it replaced data, the same counts, and how many YubiKeys kept
+their counters and how many audit events were kept and put back. A backup or
+restore that fails or is refused changes nothing and records nothing.
+
+19.9 The backup key is derived from the master key, so a backup can't be
+read without it: keep a copy of the master key somewhere safe, apart from
+the backups. `backup-create` prints the key's ID, which the header carries.
+Retention is the operator's choice (section 13, item 8); the README shows a
+nightly backup that keeps 30 days.
+
+19.10 At spec §4.4's largest scale (10,000 accounts, 100,000 YubiKeys) with
+500,000 audit events, a backup is about 195 MB. On the development machine:
+SQLite backed up in 28 seconds, verified in 8 and restored in 49 to 56;
+PostgreSQL backed up in 46 seconds and restored in 83 to 98, most of it in
+psycopg's pure-Python layer; memory stayed under 125 MB.

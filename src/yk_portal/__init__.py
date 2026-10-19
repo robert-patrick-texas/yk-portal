@@ -1,6 +1,7 @@
 """yk-portal: a web portal to manage user accounts and YubiKey OTP credentials."""
 
 import os
+import signal
 import sys
 
 
@@ -12,10 +13,17 @@ def main() -> None:
     """
     if sys.argv[1:2] == ["master-key-create"]:
         sys.exit(master_key_create(sys.argv[2:]))
+    # Stopped by cron, systemd or kill, a command ends as after Ctrl+C: transactions roll
+    # back and a file being written, such as a backup, is removed.
+    signal.signal(signal.SIGTERM, _terminated)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "yk_portal.settings.production")
     from django.core.management import execute_from_command_line
 
     execute_from_command_line(sys.argv)
+
+
+def _terminated(signum: int, frame: object) -> None:
+    raise SystemExit(128 + signum)
 
 
 def master_key_create(args: list[str]) -> int:

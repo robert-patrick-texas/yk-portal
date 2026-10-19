@@ -81,6 +81,11 @@ def _keys() -> tuple[DerivedKeys, SecretBox]:
     return _keys_for(Path(settings.YK_MASTER_KEY_PATH))
 
 
+def derived_keys() -> DerivedKeys:
+    """The keys derived from the master key named by the settings, such as the backup key."""
+    return _keys()[0]
+
+
 def secret_box() -> SecretBox:
     """The SecretBox for stored secrets, from the master key named by the settings."""
     return _keys()[1]
@@ -94,4 +99,4 @@ def lookup_digest(value: bytes, purpose: str) -> str:
     could be found by trying every one. Master key rotation recomputes it.
     """
     message = purpose.encode() + b"\0" + value
-    return hmac.new(_keys()[0].lookup, message, hashlib.sha256).hexdigest()
+    return hmac.new(derived_keys().lookup, message, hashlib.sha256).hexdigest()
