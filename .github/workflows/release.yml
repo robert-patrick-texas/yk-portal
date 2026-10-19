@@ -1,0 +1,140 @@
+# A release, when a tag vVERSION is pushed (docs/deployment.md, "Releases"):
+# every check on both database backends, the Debian package built in an
+# Ubuntu 26.04 container (packaging/deb/build), lintian, the package installed,
+# upgraded and removed under systemd (lab/lab systemd-check --deb), then the
+# GitHub release with the package, SHA256SUMS and a signed build provenance
+# attestation, its notes from CHANGELOG.md. Run by hand (workflow_dispatch),
+# it does everything but the release. Actions are pinned to commits.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: postgres
+      PGUSER: yk_portal_ci
+      PGPASSWORD: yk_portal_ci
+    steps:
+      - name: Install the tools the tests run
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            python3 git ca-certificates openssl perl libpq5 postgresql-client
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: A role that may create databases, not a superuser (README)
+        env:
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -c "CREATE ROLE yk_portal_ci LOGIN PASSWORD 'yk_portal_ci' CREATEDB CREATEROLE"
+      - name: Every check, and the tests on both backends
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          scripts/check
+
+  package:
+    needs: check
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Install the build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            python3 python3-dev build-essential libpq-dev ca-certificates git lintian
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: The tag names the version in pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)
+          [ "$GITHUB_REF_NAME" = "v$version" ] ||
+            { echo "the tag $GITHUB_REF_NAME doesn't name version $version"; exit 1; }
+      - name: Build the package
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) packaging/deb/build dist
+      - name: lintian
+        run: lintian --fail-on error,warning dist/*.deb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  install-check:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deb
+          path: dist
+      - name: Install, upgrade and remove the package under systemd
+        run: lab/lab systemd-check --deb dist/*.deb
+
+  release:
+    needs: install-check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deb
+          path: dist
+      - name: SHA256SUMS
+        working-directory: dist
+        run: sha256sum -- *.deb > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.deb
+      - name: The release, its notes from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v version="$version" '
+            /^## / { inside = ($2 == version); next }
+            inside' CHANGELOG.md > notes.md
+          grep -q . notes.md || { echo "CHANGELOG.md has no section ## $version"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/SHA256SUMS \
+            --verify-tag --title "yk-portal $version" --notes-file notes.md

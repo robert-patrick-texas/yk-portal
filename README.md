@@ -1,6 +1,6 @@
 # yk-portal
 
-[Documents](#documents) ([web version](https://robert-patrick-texas.github.io/yk-portal/)) · [Deployment guide](docs/deployment.md) · [MIT license](LICENSE)
+[Documents](#documents) ([web version](https://robert-patrick-texas.github.io/yk-portal/)) · [Deployment guide](docs/deployment.md) · [Releases](https://github.com/robert-patrick-texas/yk-portal/releases) · [Changelog](CHANGELOG.md) · [MIT license](LICENSE)
 
 A self-hosted web portal where network operations staff sign in with a
 YubiKey's PIN and its OTP, and where admins manage user accounts, groups and
@@ -42,7 +42,8 @@ installation and its deployment guide, and a lab in Docker.
 |---|---|
 | [docs/network_ops_yubikey_otp_tool_planning.md](docs/network_ops_yubikey_otp_tool_planning.md) | The planning and build specification: the functional baseline |
 | [docs/requirements-addendum.md](docs/requirements-addendum.md) | Decisions made since; where it differs from the spec, the addendum wins |
-| [docs/deployment.md](docs/deployment.md) | Installing, configuring, running, checking, upgrading and going back |
+| [docs/deployment.md](docs/deployment.md) | Installing, configuring, running, checking, upgrading and going back; building the package and releasing |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release |
 | [lab/README.md](lab/README.md) | The lab: yk-portal in Docker behind the host's nginx, for trying changes |
 
 GitHub Pages publishes these documents as a website, the
@@ -57,9 +58,9 @@ uv run --only-group pages python -m http.server -d _site   # http://localhost:80
 
 ## Requirements
 
-- Ubuntu 26.04 LTS
+- Ubuntu 26.04 LTS; the package is for amd64
 - Python 3.14.4 or newer
-- [uv](https://docs.astral.sh/uv/) 0.13.1 or newer
+- [uv](https://docs.astral.sh/uv/) 0.13.1 or newer, except to install the package
 - for PostgreSQL: PostgreSQL 14 or newer (tested with 18), and `libpq5`
   (used by `psycopg`)
 
@@ -110,10 +111,12 @@ reverse proxy and over HTTPS, use the lab ([lab/README.md](lab/README.md)):
 ## Installation
 
 [docs/deployment.md](docs/deployment.md) is the deployment guide. In short,
-as root, from the release's source tree:
+with the package from the
+[releases](https://github.com/robert-patrick-texas/yk-portal/releases) (or
+`sudo deploy/install` from the release's source tree):
 
 ```bash
-sudo deploy/install                                 # into /opt/yk-portal, with the yk-portal account and the unit
+sudo apt install ./yk-portal_1.0.0-1_amd64.deb      # into /opt/yk-portal, with the yk-portal account and the unit
 sudoedit /etc/yk-portal/config.toml                 # public_base_url, database
 sudo yk-portal master-key-create                    # mode 0600; back it up safely
 sudo chown yk-portal:yk-portal /etc/yk-portal/master.key
@@ -247,11 +250,13 @@ A backup restores into either backend. To move from SQLite to PostgreSQL:
 | `src/yk_portal/backup/` | Encrypted backup and restore |
 | `src/yk_portal/web/` | Shared page layout, light and dark themes, static files; health checks, forwarded and security headers |
 | `src/yk_portal/server.py` | `yk-portal serve`: gunicorn, configured from the configuration file |
+| `packaging/deb/` | The Debian package: its build, maintainer scripts and lintian overrides |
 | `deploy/` | `install`, the systemd unit, nginx examples |
-| `lab/` | The Docker lab |
+| `lab/` | The Docker lab, and the systemd and package checks |
 | `tests/` | Tests (pytest with pytest-django), run on both backends |
 | `scripts/check` | Every check, and the tests on SQLite and PostgreSQL |
 | `scripts/build_pages.py`, `.github/workflows/pages.yml` | The documents as a website, on GitHub Pages |
+| `.github/workflows/release.yml` | A release from a tag: checks, the package, its checks, the GitHub release |
 
 ## License
 

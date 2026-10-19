@@ -1,0 +1,39 @@
+#!/bin/sh
+# yk-portal package: after its files are removed. Purging removes
+# /etc/yk-portal/config.toml but keeps the master key, the database and the
+# backups, which can't be made again: their directories stay until you remove
+# them. The yk-portal account stays, as the owner of what is kept.
+set -e
+
+STATE=/run/yk-portal-package
+
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+        fi
+        ;;
+    purge)
+        rm -f /etc/yk-portal/config.toml
+        for directory in /etc/yk-portal /var/lib/yk-portal /var/backups/yk-portal; do
+            rmdir "$directory" 2> /dev/null || true
+            if [ -d "$directory" ]; then
+                echo "yk-portal: kept $directory; remove it once it's no longer needed"
+            fi
+        done
+        ;;
+    abort-install | abort-upgrade)
+        if [ -e $STATE/restart ]; then
+            systemctl reset-failed yk-portal.service || true
+            systemctl start yk-portal.service || true
+        fi
+        rm -rf $STATE
+        ;;
+    upgrade | failed-upgrade | disappear) ;;
+    *)
+        echo "postrm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -8,6 +8,8 @@
 .ruff_cache/
 build/
 dist/
+# but packages, for the lab to install (lab/lab --deb)
+!dist/*.deb
 *.sqlite3
 *.sqlite3-*
 *.key

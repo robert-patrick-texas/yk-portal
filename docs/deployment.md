@@ -1,28 +1,33 @@
 # yk-portal deployment guide
 
-How to install yk-portal on Ubuntu 26.04 LTS, put it behind a reverse proxy,
-run it under systemd, check it, upgrade it and go back (spec §49; addendum
-§20). The [README](../README.md) has the commands, the audit log and backups
-in detail.
+How to install yk-portal on Ubuntu 26.04 LTS, from its Debian package or
+from source, put it behind a reverse proxy, run it under systemd, check it,
+upgrade it and go back (spec §49; addendum §20, §21). The
+[README](../README.md) has the commands, the audit log and backups in detail.
 
 | What | Where |
 |---|---|
-| The code, one directory per installation | `/opt/yk-portal/releases/VERSION-TIME`, root's |
-| The release in use | `/opt/yk-portal/current` → `releases/VERSION-TIME` |
-| The `yk-portal` command | `/usr/local/bin/yk-portal` → `/opt/yk-portal/current/bin/yk-portal` |
+| The code, root's | `/opt/yk-portal`: the package's Python environment; or, installed from source, one directory per installation, `releases/VERSION-TIME`, and `current` → the one in use |
+| The `yk-portal` command | `/usr/bin/yk-portal` (the package) or `/usr/local/bin/yk-portal` (from source) |
 | Configuration and master key | `/etc/yk-portal/` |
 | The SQLite database | `/var/lib/yk-portal/` |
+| Backups | `/var/backups/yk-portal/` |
 | The service | `yk-portal.service`, running `yk-portal serve` (gunicorn) as `yk-portal` |
 | Logs | the system journal: `journalctl -u yk-portal`, `journalctl -t yk-portal-audit` |
 
 The application listens on `127.0.0.1:8000` for the reverse proxy, which
-terminates TLS (spec §3, §32). Files in the repository: `deploy/install`,
-`deploy/yk-portal.service`, `deploy/nginx/`, `config.example.toml`.
+terminates TLS (spec §3, §32). Files in the repository: `packaging/deb/`,
+`deploy/install`, `deploy/yk-portal.service`, `deploy/nginx/`,
+`config.example.toml`.
 
 ## Prerequisites
 
-Ubuntu 26.04's Python (3.14.4 or newer), `libpq5` for PostgreSQL, and
-[uv](https://docs.astral.sh/uv/) 0.13.1 or newer, installed for root:
+Ubuntu 26.04 LTS on amd64. The package needs nothing more: apt installs what
+it depends on, such as Ubuntu's Python 3.14 and `libpq5`.
+
+Installing from source needs Ubuntu's Python (3.14.4 or newer), `libpq5` for
+PostgreSQL, and [uv](https://docs.astral.sh/uv/) 0.13.1 or newer, installed
+for root:
 
 ```bash
 sudo apt install python3 libpq5 curl
@@ -39,6 +44,34 @@ sudo apt install build-essential python3-dev libpq-dev
 ```
 
 ## Install
+
+Install the package, or from source: not both, as each uses `/opt/yk-portal`
+and refuses to go over the other.
+
+### From the package
+
+Download `yk-portal_VERSION-1_amd64.deb` and `SHA256SUMS` from the
+[releases](https://github.com/robert-patrick-texas/yk-portal/releases),
+check them, and install:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify yk-portal_1.0.0-1_amd64.deb --repo robert-patrick-texas/yk-portal
+sudo apt install ./yk-portal_1.0.0-1_amd64.deb
+```
+
+`gh attestation verify` checks that the release workflow built the file from
+the repository (see [Releases](#releases)). The package installs yk-portal in
+`/opt/yk-portal`, a Python environment with the locked dependencies and
+psycopg's C implementation; `/usr/bin/yk-portal`; `yk-portal.service` in
+`/usr/lib/systemd/system`; and this guide, the changelog and the nginx
+examples in `/usr/share/doc/yk-portal`. It creates the `yk-portal` service
+account (no login shell), `/etc/yk-portal` (`root:yk-portal`, 0750),
+`/var/lib/yk-portal` and `/var/backups/yk-portal` (`yk-portal`, 0700), and
+`/etc/yk-portal/config.toml` from the example (`root:yk-portal`, 0640). It
+starts nothing: configure yk-portal, then start the service, as below.
+
+### From source
 
 From the release's source tree (a checkout or an unpacked archive), as root:
 
@@ -228,6 +261,32 @@ without it.
 
 ## Upgrade
 
+### The package
+
+```bash
+sudo apt install ./yk-portal_1.0.1-1_amd64.deb
+```
+
+Before any file changes, the upgrade stops `yk-portal.service` if it runs and
+backs the database up into `/var/backups/yk-portal`, with the version still
+installed. Then it installs the new version, migrates the database, checks
+it (`yk-portal database-status`), and starts the service again if it was
+running. The database must be reachable.
+
+- If the backup fails, the upgrade stops there and nothing changes; the
+  service runs again. Fix what the message says, such as a full disk, and
+  upgrade again; or upgrade without the backup:
+  `sudo YK_PORTAL_UPGRADE_BACKUP=no apt install ./yk-portal_1.0.1-1_amd64.deb`.
+- If the migration, the check or the start fails, the new version is
+  installed but not configured, and the service doesn't run. Fix what the
+  message says, then `sudo dpkg --configure -a` finishes the upgrade; or go
+  back with the backup made before it (next section).
+
+A reinstall does the same. Each one leaves a backup in
+`/var/backups/yk-portal`: remove the old ones as your retention policy says.
+
+### From source
+
 1. Back up, with the version still installed (a backup is made from a
    database with all of its version's migrations):
    ```bash
@@ -259,15 +318,9 @@ needed for going back, never the one `current` points at.
 
 A database migrated by the new release can't be used by the old one, and a
 backup restores only with the release that made it (addendum §19.5). So go
-back with the backup made before the upgrade:
-
-```bash
-sudo systemctl stop yk-portal
-ls /opt/yk-portal/releases                                    # the previous one, VERSION-TIME
-sudo ln -sfn releases/VERSION-TIME /opt/yk-portal/current
-```
-
-Then give the old release an empty database and restore. SQLite:
+back with the backup made before the upgrade, which the package's upgrade
+made in `/var/backups/yk-portal`, into an empty database. Stop the service
+and move the database away. SQLite:
 
 ```bash
 sudo mv /var/lib/yk-portal/yk-portal.sqlite3 /var/lib/yk-portal/yk-portal.sqlite3.new-release
@@ -275,17 +328,67 @@ sudo rm -f /var/lib/yk-portal/yk-portal.sqlite3-wal /var/lib/yk-portal/yk-portal
 ```
 
 PostgreSQL: `DROP DATABASE yk_portal` and create it again as in
-[PostgreSQL](#postgresql). Then, for either:
+[PostgreSQL](#postgresql). Then install the previous release, which migrates
+the empty database. The package:
 
 ```bash
+sudo apt install --allow-downgrades ./yk-portal_1.0.0-1_amd64.deb
+```
+
+From source:
+
+```bash
+ls /opt/yk-portal/releases                                    # the previous one, VERSION-TIME
+sudo ln -sfn releases/VERSION-TIME /opt/yk-portal/current
 sudo -u yk-portal yk-portal migrate
+```
+
+Then restore and start:
+
+```bash
 sudo -u yk-portal yk-portal backup-restore /var/backups/yk-portal/yk-portal-YYYYMMDDTHHMMSSZ.backup
 sudo systemctl start yk-portal
 ```
 
+An older package installed over the newer database stops before it starts
+the service: "the database isn't ready", because the database is newer than
+the release. Move the database away as above, then
+`sudo dpkg --configure -a`.
+
 Changes made since the backup are lost, and the counters of YubiKeys used
 since are behind: move them forward from radiator-yubikey (README, "Backup
 and restore").
+
+## Remove
+
+```bash
+sudo apt remove yk-portal   # stops and disables the service, removes /opt/yk-portal
+sudo apt purge yk-portal    # also /etc/yk-portal/config.toml
+```
+
+Neither removes the master key, the database, the backups or the
+`yk-portal` account, which can't be made again: remove `/etc/yk-portal`,
+`/var/lib/yk-portal` and `/var/backups/yk-portal` yourself once they're no
+longer needed. A PostgreSQL database stays where it is.
+
+## From a source installation to the package
+
+Back up, remove the installation from source (the configuration, the master
+key, the database and the backups stay), install the package, migrate and
+start:
+
+```bash
+sudo -u yk-portal yk-portal backup-create /var/backups/yk-portal
+sudo systemctl disable --now yk-portal
+sudo rm -r /opt/yk-portal /usr/local/bin/yk-portal /etc/systemd/system/yk-portal.service
+sudo systemctl daemon-reload
+sudo apt install ./yk-portal_1.0.0-1_amd64.deb
+sudo -u yk-portal yk-portal migrate
+sudo systemctl enable --now yk-portal
+```
+
+Back from the package to source: `sudo apt remove yk-portal`, then
+`deploy/install`, which refuses to run while the package is installed.
 
 ## Files and permissions
 
@@ -297,11 +400,51 @@ and restore").
 | `/etc/yk-portal/pgpass` | `yk-portal:yk-portal` | 0600 | the PostgreSQL password |
 | `/var/lib/yk-portal/` | `yk-portal:yk-portal` | 0700 | the SQLite database (0600) |
 | `/opt/yk-portal/` | `root:root` | 0755 | the code: the service can't change it |
+| `/usr/lib/systemd/system/yk-portal.service` | `root:root` | 0644 | the package's unit (from source: `/etc/systemd/system/`) |
 | `/var/backups/yk-portal/` | `yk-portal:yk-portal` | 0700 | backups (0600), by `backup-create` |
 
 Every `yk-portal` command and the service create their files for the service
 account alone (umask 077), whatever the umask of the shell or sudo. There is
 no `/var/log/yk-portal`: the logs go to the journal.
+
+## Building the package
+
+The release workflow builds the package from a tag ([Releases](#releases)).
+To build one from the working tree, in a disposable Ubuntu 26.04 container,
+and check it:
+
+```bash
+docker build -f packaging/deb/Dockerfile --output dist .   # dist/yk-portal_VERSION-1_amd64.deb
+lintian --fail-on error,warning dist/yk-portal_*.deb
+lab/lab systemd-check --deb dist/yk-portal_1.0.0-1_amd64.deb
+```
+
+`packaging/deb/build` does the work, as root on a disposable system: it
+installs yk-portal with uv into `/opt/yk-portal`, where the package puts it
+(a Python environment can't be moved), compiling psycopg's C implementation
+with Ubuntu's hardening flags, and packs it with the unit, the documents and
+the maintainer scripts (`packaging/deb/preinst`, `postinst`, `prerm`,
+`postrm`). `packaging/deb/lintian-overrides` says why lintian's other
+complaints don't apply. `lab/lab systemd-check --deb` installs the package
+under systemd and checks an upgrade, a failed backup, a database newer than
+the package, removal and purge ([the lab](../lab/README.md)).
+
+## Releases
+
+1. Set the version in `pyproject.toml`, run `uv lock`, and add the version's
+   section to `CHANGELOG.md` (`## 1.0.1 - YYYY-MM-DD`): its text becomes the
+   release's notes.
+2. Commit and push, then tag and push the tag:
+   ```bash
+   git tag -a v1.0.1 -m "yk-portal 1.0.1"
+   git push origin v1.0.1
+   ```
+
+The tag starts `.github/workflows/release.yml`: every check on both backends,
+the package built in an `ubuntu:26.04` container, lintian,
+`lab/lab systemd-check --deb`, then the GitHub release with the package,
+`SHA256SUMS` and a signed build provenance attestation. Run by hand (Actions,
+Release, Run workflow), it does everything but the release.
 
 ## Logs
 
@@ -321,6 +464,8 @@ level.
 |---|---|
 | The service stops at once, then is failed; `journalctl -u yk-portal` names the master key | `/etc/yk-portal/master.key` missing, unreadable by `yk-portal`, or readable by others; once fixed, `sudo systemctl reset-failed yk-portal` and start it |
 | `/health/ready` says `migrations` | run `sudo -u yk-portal yk-portal migrate` |
+| apt stops with "the backup failed, so the upgrade stops here" | the backup before the upgrade couldn't be made; nothing changed ([Upgrade](#the-package)) |
+| apt stops with "the database couldn't be migrated", "isn't ready" or "didn't start"; dpkg says yk-portal is half-configured | fix what the message says, then `sudo dpkg --configure -a`; "isn't ready" after going back: [Go back](#go-back-to-the-previous-release) |
 | `/health/ready` says `master key` after the key file changed | the service still uses the key it read: restart it |
 | 400 Bad Request for every page | the browser's host name isn't `public_base_url`'s |
 | The browser loops between redirects | the proxy doesn't send `X-Forwarded-Proto: https`, or its address isn't in `trusted_proxy_addresses` |

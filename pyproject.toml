@@ -1,6 +1,6 @@
 [project]
 name = "yk-portal"
-version = "0.1.0"
+version = "1.0.0"
 description = "Web portal to manage user accounts and YubiKey OTP credentials, alongside radiator-yubikey"
 license = "MIT"
 license-files = ["LICENSE"]

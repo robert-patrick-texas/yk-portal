@@ -1,0 +1,89 @@
+#!/bin/sh
+# yk-portal package: after its files are unpacked (docs/deployment.md, "Install"
+# and "Upgrade").
+#
+# Creates the yk-portal service account and its directories, as deploy/install
+# does, and on a first install /etc/yk-portal/config.toml from the example. It
+# never changes the configuration or the master key. A first install starts
+# nothing: the deployment guide sets yk-portal up. After an upgrade (preinst
+# left $STATE/upgrading), it migrates the database, checks it with yk-portal
+# database-status, and starts yk-portal.service again if the upgrade stopped
+# it. If one of these fails, fix the problem and run: sudo dpkg --configure -a
+set -e
+
+APP=yk-portal
+STATE=/run/yk-portal-package
+
+as_service() {
+    setpriv --reuid=$APP --regid=$APP --init-groups --reset-env -- "$@"
+}
+
+fail() {
+    cat >&2 << EOF
+yk-portal: $1
+Fix it, then finish the upgrade: sudo dpkg --configure -a
+The backup made before the upgrade is in /var/backups/yk-portal.
+EOF
+    exit 1
+}
+
+upgrade() {
+    if [ -e /etc/$APP/master.key ]; then
+        echo "yk-portal: migrating the database"
+        as_service /opt/$APP/bin/$APP migrate || fail "the database couldn't be migrated."
+        as_service /opt/$APP/bin/$APP database-status > /dev/null ||
+            fail "the database isn't ready (yk-portal database-status says why)."
+    fi
+    if [ -e $STATE/restart ]; then
+        echo "yk-portal: starting yk-portal.service"
+        # Upgrades tried again and again mustn't run into the unit's start limit.
+        systemctl reset-failed $APP.service || true
+        systemctl start $APP.service ||
+            fail "yk-portal.service didn't start (journalctl -u yk-portal says why)."
+    elif [ -e /etc/$APP/master.key ]; then
+        echo "yk-portal: upgraded; yk-portal.service wasn't running: sudo systemctl start yk-portal"
+    fi
+    rm -rf $STATE
+}
+
+case "$1" in
+    configure)
+        getent group $APP > /dev/null || groupadd --system $APP
+        if ! getent passwd $APP > /dev/null; then
+            useradd --system --gid $APP --home-dir /var/lib/$APP --no-create-home \
+                --shell /usr/sbin/nologin --comment "yk-portal service" $APP
+        fi
+        install -d -m 0750 -o root -g $APP /etc/$APP
+        install -d -m 0700 -o $APP -g $APP /var/lib/$APP /var/backups/$APP
+        if [ ! -e /etc/$APP/config.toml ]; then
+            install -m 0640 -o root -g $APP /usr/share/$APP/config.example.toml \
+                /etc/$APP/config.toml
+        fi
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+        fi
+        if [ -e /etc/systemd/system/$APP.service ]; then
+            echo "yk-portal: /etc/systemd/system/yk-portal.service overrides the package's unit" >&2
+        fi
+        if [ -e $STATE/upgrading ]; then
+            upgrade
+        else
+            echo "yk-portal installed in /opt/yk-portal. Next: edit /etc/yk-portal/config.toml, then"
+            echo "create the master key, the database and the first admin, and start the service,"
+            echo "as /usr/share/doc/yk-portal/deployment.md says."
+        fi
+        ;;
+    abort-upgrade | abort-remove | abort-deconfigure)
+        if [ -e $STATE/restart ]; then
+            systemctl reset-failed $APP.service || true
+            systemctl start $APP.service || true
+        fi
+        rm -rf $STATE
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

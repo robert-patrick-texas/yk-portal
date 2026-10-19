@@ -5,6 +5,7 @@ configuration file and master key of their own and a SQLite database, as
 systemd would run it.
 """
 
+import importlib.metadata
 import json
 import os
 import signal
@@ -208,7 +209,8 @@ def test_serve(server):
     process.send_signal(signal.SIGTERM)
     assert process.wait(timeout=30) == 0
     log = process.stderr.read() if process.stderr else ""
-    assert "yk-portal 0.1.0 starting at https://yk.example.com, with the sqlite database" in log
+    starting = f"yk-portal {importlib.metadata.version('yk-portal')} starting at"
+    assert f"{starting} https://yk.example.com, with the sqlite database" in log
     assert "Shutting down: Master" in log
 
 

@@ -38,6 +38,12 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "run it as root (sudo)"
+# One installation in /opt/yk-portal: the package's or this one.
+status=$(dpkg-query -W -f '${db:Status-Status}' "$APP" 2> /dev/null || true)
+case "$status" in
+    "" | not-installed | config-files) ;;
+    *) die "the yk-portal package is installed: upgrade it with apt (docs/deployment.md)" ;;
+esac
 # The code must be readable by the service account, whatever root's umask.
 umask 022
 command -v uv > /dev/null || die "uv isn't installed (docs/deployment.md, \"Prerequisites\")"

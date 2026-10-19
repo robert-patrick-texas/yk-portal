@@ -3,19 +3,25 @@
 # host's 127.0.0.1 only, for the host's nginx to proxy. Nothing is kept: down
 # removes the containers and their data.
 #
-#   lab/lab up [--postgresql]   build and start it (again), with SQLite or PostgreSQL
+#   lab/lab up [--postgresql] [--deb FILE]
+#                               build and start it (again), with SQLite or PostgreSQL,
+#                               installed from source or from the package FILE (dist/)
 #   lab/lab down                stop and remove it
 #   lab/lab status              what runs, and whether it is ready
 #   lab/lab logs [-f]           the application server's log
 #   lab/lab yk-portal ARGS...   a yk-portal command, as the yk-portal account
 #   lab/lab shell               a root shell in the container
-#   lab/lab systemd-check       start yk-portal.service under systemd, sandboxed, and
-#                               check it, in a container of its own that is then removed
+#   lab/lab systemd-check [--deb FILE]
+#                               start yk-portal.service under systemd, sandboxed, and
+#                               check it, in a container of its own that is then removed;
+#                               with --deb, the package's upgrade and removal too
 #
 # Settings: lab/lab.env, this machine's own and ignored by git (copy
 # lab/lab.env.example), or the environment, which wins:
 #   YK_LAB_PUBLIC_BASE_URL  where the host's reverse proxy publishes the lab (required)
 #   YK_LAB_PORT             the host's 127.0.0.1 port for the proxy's upstream (8100)
+#   YK_LAB_BUILD_NETWORK    the network for docker build, such as host where
+#                           containers can't reach the Internet (Docker's default)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -29,7 +35,7 @@ JOURNAL=/run/systemd/journal/dev-log
 if [ -f "$SETTINGS" ]; then
     while IFS='=' read -r key value; do
         case "$key" in
-            YK_LAB_PUBLIC_BASE_URL | YK_LAB_PORT)
+            YK_LAB_PUBLIC_BASE_URL | YK_LAB_PORT | YK_LAB_BUILD_NETWORK)
                 [ -n "${!key:-}" ] || printf -v "$key" '%s' "$value" ;;
         esac
     done < "$SETTINGS"
@@ -37,8 +43,21 @@ fi
 PORT=${YK_LAB_PORT:-8100}
 PUBLIC_BASE_URL=${YK_LAB_PUBLIC_BASE_URL:-}
 
-usage() { sed -n '6,13p' "$0" | sed 's/^#  *//'; }
+usage() { sed -n '6,17p' "$0" | sed 's/^#  *//'; }
 die() { echo "lab: $*" >&2; exit 1; }
+
+build() {
+    docker build -q ${YK_LAB_BUILD_NETWORK:+--network "$YK_LAB_BUILD_NETWORK"} "$@" > /dev/null
+}
+
+# FILE, a package in dist/, as a path in the source tree (the image's build context).
+deb_path() {
+    local path
+    path=$(realpath -e --relative-to=. "$1" 2> /dev/null) || die "$1: no such file"
+    [[ "$path" == dist/*.deb && "$path" != */*/* ]] ||
+        die "$1: give a package in dist/ (packaging/deb/Dockerfile builds it there)"
+    echo "$path"
+}
 
 tty_flags() { if [ -t 0 ] && [ -t 1 ]; then echo -it; else echo -i; fi; }
 
@@ -52,21 +71,27 @@ ready() {
 }
 
 up() {
-    local postgresql=no
-    case "${1:-}" in
-        --postgresql) postgresql=yes ;;
-        "") ;;
-        *) usage >&2; exit 2 ;;
-    esac
+    local postgresql=no deb=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --postgresql) postgresql=yes ;;
+            --deb) [ $# -gt 1 ] || { usage >&2; exit 2; }; deb=$(deb_path "$2"); shift ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        shift
+    done
     [ -n "$PUBLIC_BASE_URL" ] ||
         die "set YK_LAB_PUBLIC_BASE_URL in $SETTINGS (see $SETTINGS.example)"
     local image=$NAME build_args=()
-    if [ "$postgresql" = yes ]; then
+    if [ -n "$deb" ]; then
+        image=$NAME:deb  # psycopg's C implementation included
+        build_args=(--build-arg "DEB=$deb")
+    elif [ "$postgresql" = yes ]; then
         image=$NAME:pg
         build_args=(--build-arg INSTALL_OPTIONS=--postgresql-c)
     fi
     echo "Building $image"
-    docker build -q -f lab/Dockerfile ${build_args[@]+"${build_args[@]}"} -t "$image" . > /dev/null
+    build -f lab/Dockerfile ${build_args[@]+"${build_args[@]}"} -t "$image" .
     down
     docker network create "$NETWORK" > /dev/null
     local gateway
@@ -110,22 +135,34 @@ SQL
 }
 
 systemd_check() {
+    local deb="" base=$NAME
+    case "${1:-}" in
+        --deb) [ $# -eq 2 ] || { usage >&2; exit 2; }; deb=$(deb_path "$2"); base=$NAME:deb ;;
+        "") ;;
+        *) usage >&2; exit 2 ;;
+    esac
+    build -f lab/Dockerfile ${deb:+--build-arg "DEB=$deb"} -t "$base" .
+    build -f lab/Dockerfile.systemd --build-arg "BASE=$base" -t "$base-systemd" .
     # systemd needs the container privileged to set up each unit's sandbox. It has
     # no network but its own loopback, and is removed afterwards.
-    docker build -q -f lab/Dockerfile -t "$NAME" . > /dev/null
-    docker build -q -f lab/Dockerfile.systemd -t "$NAME:systemd" . > /dev/null
     docker rm -f "$NAME-systemd" > /dev/null 2>&1 || true
     docker run -d --name "$NAME-systemd" --privileged --cgroupns=private --network none \
-        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp "$NAME:systemd" > /dev/null
-    local status=0
-    docker exec "$NAME-systemd" /usr/local/src/yk-portal/lab/systemd-check || status=$?
+        --tmpfs /run --tmpfs /run/lock --tmpfs /tmp "$base-systemd" > /dev/null
+    local status=0 src=/usr/local/src/yk-portal
+    if [ -n "$deb" ]; then
+        docker exec "$NAME-systemd" "$src/lab/deb-check" upgrade "$src/$deb" &&
+            docker exec "$NAME-systemd" "$src/lab/systemd-check" &&
+            docker exec "$NAME-systemd" "$src/lab/deb-check" remove "$src/$deb" || status=$?
+    else
+        docker exec "$NAME-systemd" "$src/lab/systemd-check" || status=$?
+    fi
     docker rm -f "$NAME-systemd" > /dev/null
     return "$status"
 }
 
 case "${1:-}" in
     up) shift; up "$@" ;;
-    systemd-check) systemd_check ;;
+    systemd-check) shift; systemd_check "$@" ;;
     down) down; echo "yk-portal lab removed." ;;
     status)
         docker ps -a --filter "name=^($NAME|$DB)\$" --format '{{.Names}}: {{.Status}}'

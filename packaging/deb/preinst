@@ -1,0 +1,79 @@
+#!/bin/sh
+# yk-portal package: before its files are unpacked (docs/deployment.md, "Upgrade").
+#
+# An upgrade, or a reinstall, stops yk-portal.service if it runs and backs the
+# database up into /var/backups/yk-portal with the version still installed.
+# If the backup fails, the upgrade stops there: nothing changed, and the
+# service runs again. postinst migrates the database and starts the service.
+# YK_PORTAL_UPGRADE_BACKUP=no skips the backup.
+#
+# A first install refuses to go over an installation from source
+# (deploy/install), which uses /opt/yk-portal too.
+set -e
+
+STATE=/run/yk-portal-package
+
+as_service() {
+    setpriv --reuid=yk-portal --regid=yk-portal --init-groups --reset-env -- "$@"
+}
+
+start_again() {
+    if [ -e $STATE/restart ]; then
+        echo "yk-portal: starting yk-portal.service again"
+        # Upgrades tried again and again mustn't run into the unit's start limit.
+        systemctl reset-failed yk-portal.service || true
+        systemctl start yk-portal.service || true
+    fi
+    rm -rf $STATE
+}
+
+backup() {
+    if [ "${YK_PORTAL_UPGRADE_BACKUP:-yes}" = no ]; then
+        echo "yk-portal: YK_PORTAL_UPGRADE_BACKUP=no: no backup before the upgrade" >&2
+        return 0
+    fi
+    # Never set up (no master key yet): nothing to back up.
+    [ -e /etc/yk-portal/master.key ] || return 0
+    echo "yk-portal: backing up the database into /var/backups/yk-portal before the upgrade"
+    if ! as_service /opt/yk-portal/bin/yk-portal backup-create --if-database /var/backups/yk-portal
+    then
+        cat >&2 << 'EOF'
+yk-portal: the backup failed, so the upgrade stops here and nothing changed.
+Fix what the message above says and upgrade again, or upgrade without a backup:
+    sudo YK_PORTAL_UPGRADE_BACKUP=no apt install ./yk-portal_VERSION_ARCH.deb
+EOF
+        start_again
+        exit 1
+    fi
+}
+
+case "$1" in
+    install)
+        rm -rf $STATE
+        if [ -e /opt/yk-portal/releases ] || [ -L /opt/yk-portal/current ]; then
+            cat >&2 << 'EOF'
+yk-portal: /opt/yk-portal holds an installation from source (deploy/install).
+Remove it first: docs/deployment.md, "From a source installation to the package".
+EOF
+            exit 1
+        fi
+        ;;
+    upgrade)
+        rm -rf $STATE
+        mkdir -m 0700 $STATE
+        : > $STATE/upgrading
+        if [ -d /run/systemd/system ] && systemctl is-active --quiet yk-portal.service; then
+            echo "yk-portal: stopping yk-portal.service for the upgrade"
+            systemctl stop yk-portal.service
+            : > $STATE/restart
+        fi
+        backup
+        ;;
+    abort-upgrade) ;;
+    *)
+        echo "preinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

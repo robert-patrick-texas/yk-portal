@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import OperationalError
+from django.db import OperationalError, connection
 
 from yk_portal.accounts.models import Role, User
 from yk_portal.audit.immutability import rewritable
@@ -98,6 +98,34 @@ def test_create_a_backup(populated, tmp_path, monkeypatch):
 def test_quiet_for_cron(populated, tmp_path):
     assert run("backup-create", "-v", "0", str(tmp_path / "test.backup")) == ("", "")
     assert AuditEvent.objects.filter(event_type=EventType.BACKUP_CREATED).exists()
+
+
+def test_if_database_backs_up_a_database(populated, tmp_path):
+    _, err = run("backup-create", "--if-database", str(tmp_path / "test.backup"))
+    assert err.startswith("Backed up 1 account, 1 YubiKey,")
+    assert service.verify((tmp_path / "test.backup").open("rb")).counts["users"] == 1
+
+
+def test_if_database_before_the_first_migrate(tmp_path, monkeypatch):
+    # The package's upgrade of an installation never set up (packaging/deb/preinst).
+    monkeypatch.setattr(connection.introspection, "table_names", lambda *args, **kwargs: [])
+    out, err = run("backup-create", "--if-database", str(tmp_path))
+    assert (out, err) == ("", "No database yet: nothing to back up.\n")
+    assert run("backup-create", "--if-database", "-v", "0", str(tmp_path)) == ("", "")
+    assert list(tmp_path.iterdir()) == []
+    assert not AuditEvent.objects.filter(event_type=EventType.BACKUP_CREATED).exists()
+    with pytest.raises(CommandError, match="isn't fully migrated; run yk-portal migrate first"):
+        run("backup-create", str(tmp_path))  # without the option, as before
+
+
+def test_if_database_never_creates_the_sqlite_file(tmp_path, monkeypatch):
+    if connection.vendor != "sqlite":
+        pytest.skip("SQLite only")
+    missing = tmp_path / "yk-portal.sqlite3"
+    monkeypatch.setitem(connection.settings_dict, "NAME", str(missing))
+    _, err = run("backup-create", "--if-database", str(tmp_path))
+    assert err == "No database yet: nothing to back up.\n"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_directory_gets_a_dated_name(populated, tmp_path):

@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Build yk-portal's Debian package for Ubuntu 26.04 LTS from this source tree
+# (docs/deployment.md, "Building the package"):
+#
+#   packaging/deb/build OUTPUT-DIRECTORY
+#
+# Run it as root on a disposable Ubuntu 26.04 system, such as a container
+# (packaging/deb/Dockerfile, the release workflow), with uv, build-essential,
+# python3-dev and libpq-dev. It installs yk-portal into /opt/yk-portal there,
+# where the package puts it, because a virtual environment can't be moved. The
+# package holds that environment (the locked dependencies, psycopg's C
+# implementation, compiled bytecode), /usr/bin/yk-portal, the systemd unit, the
+# maintainer scripts beside this one, and the documents.
+#
+#   DEB_REVISION  the Debian revision (default 1): yk-portal_VERSION-REVISION_ARCH.deb
+set -euo pipefail
+
+APP=yk-portal
+PREFIX=/opt/yk-portal
+# The interpreter itself, python3.14, which the package depends on, not the python3 link.
+PYTHON=$(readlink -f /usr/bin/python3)
+
+die() { echo "packaging/deb/build: $*" >&2; exit 1; }
+
+[ $# -eq 1 ] || { echo "usage: packaging/deb/build OUTPUT-DIRECTORY" >&2; exit 2; }
+out=$(realpath -m "$1")
+[ "$(id -u)" -eq 0 ] || die "run it as root, on a disposable system"
+[ ! -e "$PREFIX" ] || die "$PREFIX exists: build on a disposable system with no yk-portal installed"
+for command in uv dpkg-deb dpkg-buildflags gcc strip pg_config; do
+    command -v "$command" > /dev/null || die "$command not found (uv, build-essential, libpq-dev)"
+done
+here=$(cd "$(dirname "$0")" && pwd)
+source=$(cd "$here/../.." && pwd)
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$source/pyproject.toml" | head -n 1)
+[ -n "$version" ] || die "no version in $source/pyproject.toml"
+revision=${DEB_REVISION:-1}
+arch=$(dpkg --print-architecture)
+python=$("$PYTHON" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+python_full=$("$PYTHON" -c 'import platform; print(platform.python_version())')
+# shellcheck source=/dev/null
+codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+deb=$out/${APP}_$version-${revision}_$arch.deb
+
+umask 022
+echo "Building $APP $version-$revision for $arch (Python $python_full)"
+# psycopg's C implementation is compiled here: with Ubuntu's hardening flags.
+eval "$(DEB_BUILD_MAINT_OPTIONS=hardening=+all dpkg-buildflags --export=sh)"
+UV_PROJECT_ENVIRONMENT=$PREFIX uv sync --project "$source" --locked --no-dev --no-editable \
+    --extra postgresql-c --compile-bytecode --python "$PYTHON" --no-python-downloads --quiet
+# A failed build of psycopg's C implementation would leave the pure-Python one.
+"$PREFIX/bin/python" -I -c 'import psycopg; assert psycopg.pq.__impl__ == "c", psycopg.pq.__impl__'
+# Every library the compiled modules need is on the system or bundled with them.
+if find "$PREFIX" -name '*.so*' -type f -exec ldd {} + 2> /dev/null | grep 'not found'; then
+    die "a compiled module needs a library that isn't there"
+fi
+
+staging=$(mktemp -d)
+chmod 0755 "$staging"
+trap 'rm -rf "$staging"' EXIT
+mkdir -p "$staging/opt" "$staging/usr/bin" "$staging/DEBIAN"
+cp -a "$PREFIX" "$staging/opt/"
+# uv's files for a project environment, and the activation scripts: not for a service.
+rm -f "$staging$PREFIX"/{.gitignore,.lock,CACHEDIR.TAG} "$staging$PREFIX"/bin/{activate*,*.bat}
+find "$staging$PREFIX" -name '*.so' -type f \
+    -exec strip --strip-unneeded --remove-section=.comment --remove-section=.note {} +
+ln -s "$PREFIX/bin/$APP" "$staging/usr/bin/$APP"
+
+unit=$staging/usr/lib/systemd/system/$APP.service
+install -D -m 0644 "$source/deploy/$APP.service" "$unit"
+sed -i "s#^ExecStart=$PREFIX/current/bin/$APP #ExecStart=$PREFIX/bin/$APP #" "$unit"
+grep -q "^ExecStart=$PREFIX/bin/$APP serve\$" "$unit" || die "the unit's ExecStart wasn't changed"
+
+install -D -m 0644 "$source/config.example.toml" "$staging/usr/share/$APP/config.example.toml"
+doc=$staging/usr/share/doc/$APP
+install -D -m 0644 -t "$doc" "$source/README.md" "$source/CHANGELOG.md" \
+    "$source/docs/deployment.md"
+install -D -m 0644 -t "$doc/examples/nginx" "$source"/deploy/nginx/*.conf
+install -D -m 0644 "$here/lintian-overrides" "$staging/usr/share/lintian/overrides/$APP"
+"$PREFIX/bin/python" -I "$here/copyright.py" "$source/LICENSE" > "$doc/copyright"
+date=$(date -R ${SOURCE_DATE_EPOCH:+-d "@$SOURCE_DATE_EPOCH"})
+maintainer="Robert Patrick <193846785+robert-patrick-texas@users.noreply.github.com>"
+printf '%s (%s-%s) %s; urgency=medium\n\n  * yk-portal %s: /usr/share/doc/yk-portal/CHANGELOG.md\n\n -- %s  %s\n' \
+    "$APP" "$version" "$revision" "$codename" "$version" "$maintainer" "$date" |
+    gzip -9n > "$doc/changelog.Debian.gz"
+
+install -m 0755 -t "$staging/DEBIAN" "$here/preinst" "$here/postinst" "$here/prerm" "$here/postrm"
+cat > "$staging/DEBIAN/control" << EOF
+Package: $APP
+Version: $version-$revision
+Architecture: $arch
+Maintainer: $maintainer
+Installed-Size: $(du -sk "$staging" | cut -f1)
+Depends: python$python (>= $python_full), libc6, libcrypt1, libpq5, passwd
+Section: admin
+Priority: optional
+Homepage: https://github.com/robert-patrick-texas/yk-portal
+Description: web portal for user accounts and YubiKey OTP credentials
+ yk-portal gives network operations staff a web interface to their accounts,
+ protected by a PIN and a YubiKey one-time password, and to the YubiKeys they
+ use. Admins manage accounts, groups and settings, and read the audit log.
+ It exports the accounts and YubiKeys for radiator-yubikey (RADIUS).
+ .
+ It runs as yk-portal.service, behind a reverse proxy that provides HTTPS,
+ with SQLite or PostgreSQL. Set it up as /usr/share/doc/yk-portal/deployment.md
+ says.
+EOF
+(cd "$staging" && find . -path ./DEBIAN -prune -o -type f -printf '%P\0' | sort -z |
+    xargs -0 md5sum) > "$staging/DEBIAN/md5sums"
+chmod 0644 "$staging/DEBIAN/control" "$staging/DEBIAN/md5sums"
+chmod -R go-w "$staging"
+
+mkdir -p "$out"
+dpkg-deb --root-owner-group -Zxz --build "$staging" "$deb" > /dev/null
+echo "Built $deb ($(du -h "$deb" | cut -f1))"

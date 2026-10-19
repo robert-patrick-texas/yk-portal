@@ -1,0 +1,21 @@
+#!/bin/sh
+# yk-portal package: before its files are removed. Removing the package stops
+# and disables yk-portal.service. An upgrade leaves it to the new version's
+# preinst, which stops the service and backs up the database.
+set -e
+
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl stop yk-portal.service
+            systemctl disable --quiet yk-portal.service
+        fi
+        ;;
+    upgrade | deconfigure | failed-upgrade) ;;
+    *)
+        echo "prerm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

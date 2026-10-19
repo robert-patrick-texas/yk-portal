@@ -1,5 +1,7 @@
 # yk-portal's application server (spec §49; docs/deployment.md).
-# deploy/install installs it as /etc/systemd/system/yk-portal.service.
+# The package installs it as /usr/lib/systemd/system/yk-portal.service, with
+# ExecStart=/opt/yk-portal/bin/yk-portal serve; deploy/install, as it is, as
+# /etc/systemd/system/yk-portal.service.
 #
 # It runs as the unprivileged yk-portal account, reads /etc/yk-portal, writes
 # only /var/lib/yk-portal (the SQLite database), and listens where
@@ -8,6 +10,7 @@
 
 [Unit]
 Description=yk-portal: accounts and YubiKey OTP credentials
+Documentation=https://robert-patrick-texas.github.io/yk-portal/docs/deployment.html
 After=network-online.target postgresql.service
 Wants=network-online.target
 # A missing master key or a bad setting stops it at once (journalctl -u

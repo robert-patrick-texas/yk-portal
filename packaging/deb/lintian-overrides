@@ -1,0 +1,30 @@
+# yk-portal's package is a self-contained Python environment for one service,
+# not a Debian archive package (packaging/deb/build).
+
+# The installation directory chosen for yk-portal (docs/deployment.md).
+yk-portal: dir-or-file-in-opt
+# Compiled at build time, because the service can't write in /opt/yk-portal
+# (ProtectSystem=strict) and root's commands shouldn't add files there.
+yk-portal: package-installs-python-pycache-dir
+# The environment's scripts run its own interpreter.
+yk-portal: unusual-interpreter
+# Files of the bundled Python packages, as they come: licenses beside their
+# code, sqlparse's module, and jQuery in Django's admin, which yk-portal
+# doesn't install or serve.
+yk-portal: extra-license-file
+yk-portal: package-contains-documentation-outside-usr-share-doc
+yk-portal: script-not-executable [opt/yk-portal/lib/python3.14/site-packages/sqlparse/__main__.py]
+yk-portal: embedded-javascript-library *
+# Wheels built elsewhere, without -z now.
+yk-portal: hardening-no-bindnow [opt/yk-portal/lib/python3.14/site-packages/_argon2_cffi_bindings/*]
+yk-portal: hardening-no-bindnow [opt/yk-portal/lib/python3.14/site-packages/_cffi_backend.*]
+# An upgrade stops the service and backs the database up before any file
+# changes, and migrates before it starts again (packaging/deb/preinst,
+# postinst): an order the systemd helpers don't offer.
+yk-portal: maintainer-script-calls-systemctl
+# Not an upload to Debian.
+yk-portal: initial-upload-closes-no-bugs
+# CHANGELOG.md keeps its name, as in the repository.
+yk-portal: wrong-name-for-upstream-changelog
+# yk-portal --help and the deployment guide document the command.
+yk-portal: no-manual-page

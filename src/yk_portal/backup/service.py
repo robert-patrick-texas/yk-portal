@@ -16,6 +16,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC
+from pathlib import Path
 from typing import Any, BinaryIO
 
 from django.db import DataError, IntegrityError, connection
@@ -78,6 +79,16 @@ def application_version() -> str:
 def schema() -> dict[str, str]:
     """Each app's last migration in this version of yk-portal."""
     return dict(sorted(MigrationLoader(None, ignore_no_migrations=True).graph.leaf_nodes()))
+
+
+def has_database() -> bool:
+    """Whether there is a database to back up: one yk-portal migrate has made.
+
+    A missing SQLite file is looked for first, because connecting would create it.
+    """
+    if connection.vendor == "sqlite" and not Path(connection.settings_dict["NAME"]).exists():
+        return False
+    return "django_migrations" in connection.introspection.table_names()
 
 
 def _check_migrated() -> None:

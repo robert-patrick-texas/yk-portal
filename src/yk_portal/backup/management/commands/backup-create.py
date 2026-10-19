@@ -30,11 +30,21 @@ class Command(BaseCommand):
             "yk-portal-YYYYMMDDTHHMMSSZ.backup in it; or - for standard output",
         )
         parser.add_argument("-f", "--force", action="store_true", help="replace FILE if it exists")
+        parser.add_argument(
+            "--if-database",
+            action="store_true",
+            help="do nothing, successfully, while there is no database yet (yk-portal "
+            "migrate never ran), as the package's upgrade does",
+        )
 
     def handle(self, *args: object, **options: object) -> None:
         self.stderr.style_func = None  # a summary, not an error
         file, force = str(options["file"]), bool(options["force"])
         try:
+            if options["if_database"] and not service.has_database():
+                if options["verbosity"] != 0:
+                    self.stderr.write("No database yet: nothing to back up.")
+                return
             if file == "-":
                 if sys.stdout.isatty():
                     raise CommandError("won't write a backup to a terminal; give a FILE")

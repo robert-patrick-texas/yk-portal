@@ -20,6 +20,7 @@ Then:
 ```bash
 lab/lab up                          # build and start, with SQLite
 lab/lab up --postgresql             # or with PostgreSQL 18 and psycopg's C implementation
+lab/lab up --deb dist/yk-portal_1.0.0-1_amd64.deb   # or installed from the package
 lab/lab yk-portal bootstrap-admin root
 lab/lab status
 lab/lab logs -f
@@ -27,10 +28,12 @@ lab/lab yk-portal database-status   # any yk-portal command, as the yk-portal ac
 lab/lab shell
 lab/lab down
 lab/lab systemd-check               # yk-portal.service under systemd, sandboxed
+lab/lab systemd-check --deb dist/yk-portal_1.0.0-1_amd64.deb   # the package's, and its upgrades
 ```
 
 `lab/lab up` builds the image from the working tree (`lab/Dockerfile`: Ubuntu
-26.04, uv, `deploy/install`), and runs it on a Docker network of its own,
+26.04, uv, `deploy/install`; or, with `--deb`, the package, which
+`packaging/deb/Dockerfile` builds into `dist/`), and runs it on a Docker network of its own,
 `yk-portal-lab`, published on the host's `127.0.0.1` only, at `YK_LAB_PORT`
 (8100 if not set). At each start, `lab/entrypoint` writes the configuration
 (`public_base_url` from `YK_LAB_PUBLIC_BASE_URL`; the network's gateway,
@@ -48,7 +51,17 @@ systemd as its init), starts `yk-portal.service` under systemd with its whole
 sandbox in a privileged container with no network, signs in, checks the
 journal and the database file, prints `systemd-analyze security`'s rating,
 checks that the unit ends failed without its master key, and removes the
-container.
+container. With `--deb`, `lab/deb-check` checks the package's maintainer
+scripts there too, first an upgrade (backed up, migrated, running again), an
+upgrade whose backup fails (stopped, nothing changed), one with
+`YK_PORTAL_UPGRADE_BACKUP=no`, and one onto a database newer than the package
+(stopped before the start, finished by `dpkg --configure -a`); and last,
+removal, a first install again, purge, and the package refusing to go over
+an installation from source. The release workflow runs it on every release.
+
+Where containers can't reach the Internet through Docker's default network,
+set `YK_LAB_BUILD_NETWORK=host` (in `lab/lab.env` or the environment) for the
+image builds.
 
 ## The host's nginx, once
 

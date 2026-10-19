@@ -649,6 +649,11 @@ live connector (section 11) carries removals.
 | 2026-10-19 | `/health/live` and `/health/ready` (database, migrations, master key), answered before the host name is checked | 20.7 |
 | 2026-10-19 | Installed by `deploy/install` into a new `/opt/yk-portal/releases/VERSION-TIME` each time, with `current` pointing at the one in use; a sandboxed systemd unit that gives up after 5 failed starts in 2 minutes; every command's files at umask 077 | 20.9 |
 | 2026-10-19 | Under a path: no HSTS header (the site's policy), and a CSRF cookie name of yk-portal's own (`yk_csrftoken`) | 20.2 |
+| 2026-10-19 | The first release is 1.0.0, a Debian package for Ubuntu 26.04 LTS installed in `/opt/yk-portal` | 21.1, 21.2 |
+| 2026-10-19 | A package upgrade stops the service and backs the database up with the old version first (no backup, no upgrade), then migrates and starts the service again | 21.4 |
+| 2026-10-19 | Releases are built and published by GitHub Actions from a tag, with `SHA256SUMS` and a signed build provenance attestation | 21.6 |
+| 2026-10-19 | `deploy/install` stays, for installing from source; the two refuse to go over each other | 21.2 |
+| 2026-10-19 | The package: amd64 only; psycopg's C implementation always included; a purge keeps the master key, the database and the backups; no apt repository yet | 21.3, 21.5 |
 
 ---
 
@@ -1115,7 +1120,8 @@ It uses Ubuntu's libpq and OpenSSL, so their security updates apply; the
 bundled binary wheel was not chosen. SQLite installations need nothing more.
 Measured in the lab with 200,000 audit events: a backup in 7.6 s instead of
 12.2, a restore in 11.6 s instead of 16.7. `database-status` shows the
-implementation, with a warning for the pure-Python one.
+implementation, with a warning for the pure-Python one. The package always
+includes it, built the same way (section 21.3).
 
 20.7 **Health checks** (spec §41). `/health/live` answers `{"status":
 "live"}` while the process runs. `/health/ready` answers `{"status":
@@ -1181,3 +1187,81 @@ meanwhile.
 privileged container with no network, signs in, checks the journal and the
 database file, checks that the unit ends failed without its master key, and
 removes the container. The lab is not for production.
+
+---
+
+## 21. Release and packaging
+
+Adds to spec §49 and to section 20.9. `docs/deployment.md` has the commands:
+"Install", "Upgrade", "Go back to the previous release", "Remove",
+"Building the package" and "Releases".
+
+21.1 **The first release is 1.0.0** (user's decision): it meets spec §53.
+Versions follow Semantic Versioning; the tag is `vVERSION`, the package
+`yk-portal_VERSION-REVISION_amd64.deb`, where the Debian revision (1) counts
+packagings of one version. `CHANGELOG.md` has a section per version, which
+becomes the release's notes.
+
+21.2 **A Debian package for Ubuntu 26.04 LTS, in `/opt/yk-portal`** (user's
+decision). The package holds a Python environment at `/opt/yk-portal` itself
+(the locked dependencies, compiled bytecode, run by Ubuntu's `python3.14`),
+`/usr/bin/yk-portal`, the unit in `/usr/lib/systemd/system` with
+`ExecStart=/opt/yk-portal/bin/yk-portal serve`, and the documents and nginx
+examples in `/usr/share/doc/yk-portal`. Its postinst creates the service
+account, the directories and `config.toml` as `deploy/install` does. A first
+install starts nothing and migrates nothing: the guide sets yk-portal up.
+`deploy/install` stays for installing from source (user's decision), with
+its own layout under `/opt/yk-portal` (section 20.9); the package refuses to
+install over it, and `deploy/install` refuses to run while the package is
+installed.
+
+21.3 The package is for amd64 only: the compiled dependencies make it
+architecture-specific, and arm64 can come later. psycopg's C implementation
+is always included, built with Ubuntu's hardening flags; section 20.6's
+option is for installations from source. The compiled modules are stripped.
+The package depends on `python3.14 (>= 3.14.4)`, `libc6`, `libcrypt1`,
+`libpq5` and `passwd`. lintian finds no error or warning; the overrides
+(`packaging/deb/lintian-overrides`) say why the rest don't apply to a
+self-contained package in `/opt`.
+
+21.4 **An upgrade backs up, migrates and starts again** (user's decision).
+The new version's preinst, while the old version's files are still there,
+stops `yk-portal.service` if it runs and backs the database up with the old
+version (`backup-create --if-database /var/backups/yk-portal`, which does
+nothing before the first `migrate`). If the backup fails, the upgrade stops
+there, nothing changes, and the service runs again;
+`YK_PORTAL_UPGRADE_BACKUP=no` skips the backup. After the files change,
+postinst migrates the database, checks it with `database-status` (which
+catches a database newer than the package), clears the unit's start limit
+and starts the service if the upgrade stopped it. If one of these fails,
+the package stays half-configured and the service stopped, until the
+problem is fixed and `dpkg --configure -a` finishes. A reinstall is an
+upgrade. Without a master key (never set up), nothing is backed up or
+migrated.
+
+21.5 **Removal keeps what can't be made again.** `apt remove` stops and
+disables the service and removes `/opt/yk-portal`, `/usr/bin/yk-portal` and
+the unit. A purge also removes `/etc/yk-portal/config.toml`, but keeps the
+master key, the database, the backups and the service account, and says so.
+There is no apt repository yet: the package is downloaded from the GitHub
+release.
+
+21.6 **Releases** (user's decision). A pushed tag `vVERSION` runs
+`.github/workflows/release.yml`: `scripts/check` in an `ubuntu:26.04`
+container with a PostgreSQL 18 service (a role that may create databases,
+not a superuser); the package built by `packaging/deb/build` in an
+`ubuntu:26.04` container, the tag checked against `pyproject.toml`; lintian
+failing on errors and warnings; `lab/lab systemd-check --deb` on the runner;
+then the GitHub release with the package, `SHA256SUMS`, a build provenance
+attestation (`gh attestation verify`), and the changelog's section as its
+notes. Run by hand, it stops before the release. Actions are pinned to
+commits, as in `pages.yml`.
+
+21.7 Checked before the first release: the package built and lintian-clean;
+`lab/lab systemd-check --deb` (upgrade, failed backup, skipped backup, newer
+database, the systemd sandbox, removal, purge, the refusals); the source
+installation's `systemd-check`; and `deploy/nginx/yk-portal.conf` live in
+front of the package, with a self-signed certificate (HTTP redirected, HTTP/2,
+the headers, a sign-in through the proxy, the client's address in the audit
+log, `/health/` hidden, the sign-in rate limit). Not yet on a real Ubuntu
+26.04 server or VM: this host can't run one (no nested virtualization).

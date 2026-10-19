@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Inside the systemd lab container with the package installed (lab/lab
+# systemd-check --deb FILE): what the package's maintainer scripts do.
+#
+#   lab/deb-check upgrade DEB   before lab/systemd-check: an upgrade backs up,
+#                               migrates and starts the service again; a failed
+#                               backup stops it with nothing changed; a database
+#                               newer than the package stops it before the start
+#   lab/deb-check remove DEB    after: removal stops the service and keeps the
+#                               data; a purge keeps the master key and the data; the
+#                               package won't go over an installation from source
+set -euo pipefail
+
+phase=${1:?usage: lab/deb-check upgrade|remove DEB}
+deb=${2:?usage: lab/deb-check upgrade|remove DEB}
+database=/var/lib/yk-portal/yk-portal.sqlite3
+backups=/var/backups/yk-portal
+
+fail() { echo "FAILED: $*" >&2; exit 1; }
+as_service() { setpriv --reuid=yk-portal --regid=yk-portal --init-groups --reset-env -- "$@"; }
+status() { dpkg-query -W -f '${db:Status-Status}' yk-portal 2> /dev/null || true; }
+ready() { curl -fs http://127.0.0.1:8000/health/ready > /dev/null; }
+running() { systemctl is-active --quiet yk-portal && ready; }
+backup_count() { find $backups -name '*.backup' | wc -l; }
+# dpkg -i DEB with any VAR=VALUE before it; its output in $output, its status returned.
+install_deb() {
+    local code=0
+    output=$(env "$@" dpkg -i "$deb" 2>&1) || code=$?
+    return "$code"
+}
+
+upgrade() {
+    for _ in $(seq 30); do
+        systemctl is-active --quiet yk-portal 2> /dev/null && ready && break
+        sleep 1
+    done
+    ready || fail "yk-portal.service isn't ready"
+    [ "$(status)" = installed ] || fail "the package isn't installed: $(status)"
+    if out=$(/usr/local/src/yk-portal/deploy/install --no-systemd 2>&1) ||
+        ! grep -q "the yk-portal package is installed" <<< "$out"; then
+        fail "deploy/install didn't refuse to go over the package: $out"
+    fi
+    echo "deploy/install: refuses to go over the package"
+
+    local before
+    before=$(backup_count)
+    install_deb || fail "the upgrade: $output"
+    [ "$(backup_count)" -eq $((before + 1)) ] || fail "no backup before the upgrade: $output"
+    as_service yk-portal backup-verify "$(find $backups -name '*.backup' | sort | tail -n 1)" \
+        > /dev/null 2>&1 || fail "the upgrade's backup doesn't verify"
+    grep -q "migrating the database" <<< "$output" || fail "no migration: $output"
+    running || fail "not running after the upgrade"
+    echo "upgrade: backed up (verified), migrated, running again"
+
+    chmod 0500 $backups
+    before=$(backup_count)
+    ! install_deb || fail "the upgrade went on although the backup failed"
+    grep -q "the backup failed, so the upgrade stops here" <<< "$output" || fail "$output"
+    [ "$(status)" = installed ] || fail "after a failed backup, the package is $(status)"
+    running || fail "not running after a failed backup"
+    echo "upgrade with a failing backup: stopped, nothing changed, running again"
+
+    install_deb YK_PORTAL_UPGRADE_BACKUP=no || fail "the upgrade without a backup: $output"
+    [ "$(backup_count)" -eq "$before" ] || fail "YK_PORTAL_UPGRADE_BACKUP=no made a backup"
+    chmod 0700 $backups
+    running || fail "not running after YK_PORTAL_UPGRADE_BACKUP=no"
+    echo "upgrade with YK_PORTAL_UPGRADE_BACKUP=no: no backup, running again"
+
+    # As after going back to an older package without moving the database away.
+    local future="INSERT INTO django_migrations (app, name, applied)
+        VALUES ('audit', '9999_from_the_future', datetime('now'))"
+    as_service sqlite3 $database "$future"
+    ! install_deb YK_PORTAL_UPGRADE_BACKUP=no || fail "the package started on a newer database"
+    grep -q "the database isn't ready" <<< "$output" || fail "$output"
+    [ "$(status)" = half-configured ] || fail "the package is $(status), not half-configured"
+    ! systemctl is-active --quiet yk-portal || fail "it started on a newer database"
+    as_service sqlite3 $database "DELETE FROM django_migrations WHERE name = '9999_from_the_future'"
+    dpkg --configure -a > /dev/null 2>&1 || fail "dpkg --configure -a didn't finish the upgrade"
+    [ "$(status)" = installed ] || fail "after dpkg --configure -a, the package is $(status)"
+    running || fail "not running after dpkg --configure -a"
+    echo "upgrade onto a newer database: stopped before the start; dpkg --configure -a finished it"
+}
+
+remove() {
+    dpkg -r yk-portal > /dev/null 2>&1 || fail "dpkg -r"
+    ! systemctl is-active --quiet yk-portal || fail "still running after the removal"
+    ! systemctl is-enabled --quiet yk-portal 2> /dev/null || fail "still enabled after the removal"
+    [ ! -e /opt/yk-portal ] || fail "/opt/yk-portal is left: $(find /opt/yk-portal | head -n 5)"
+    [ ! -e /usr/bin/yk-portal ] || fail "/usr/bin/yk-portal is left"
+    [ -e /etc/yk-portal/config.toml ] && [ -e $database ] || fail "the removal took data"
+    echo "removal: stopped and disabled, nothing left in /opt, configuration and data kept"
+
+    install_deb || fail "installing again: $output"
+    grep -q "Next: edit /etc/yk-portal/config.toml" <<< "$output" || fail "$output"
+    ! grep -q "migrating" <<< "$output" || fail "a first install migrated"
+    ! systemctl is-active --quiet yk-portal || fail "a first install started the service"
+    echo "installing again: a first install, nothing started or migrated"
+
+    output=$(dpkg -P yk-portal 2>&1) || fail "dpkg -P: $output"
+    [ ! -e /etc/yk-portal/config.toml ] || fail "the purge kept config.toml"
+    [ -e /etc/yk-portal/master.key.away ] && [ -e $database ] && [ "$(backup_count)" -gt 0 ] ||
+        fail "the purge took the master key, the database or the backups"
+    grep -q "kept /var/lib/yk-portal" <<< "$output" || fail "$output"
+    echo "purge: config.toml removed; master key, database and backups kept"
+
+    mkdir -p /opt/yk-portal/releases
+    ! install_deb || fail "the package went over an installation from source"
+    grep -q "holds an installation from source" <<< "$output" || fail "$output"
+    [ "$(status)" != installed ] || fail "the package is installed over a source installation"
+    rm -r /opt/yk-portal
+    echo "package over an installation from source: refused"
+}
+
+case "$phase" in
+    upgrade) upgrade ;;
+    remove) remove ;;
+    *) fail "unknown phase $phase" ;;
+esac
